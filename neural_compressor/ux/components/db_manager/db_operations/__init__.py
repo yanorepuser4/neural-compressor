@@ -32,6 +32,9 @@ from neural_compressor.ux.components.db_manager.db_operations.examples_api_inter
 from neural_compressor.ux.components.db_manager.db_operations.model_api_interface import (
     ModelAPIInterface,
 )
+from neural_compressor.ux.components.db_manager.db_operations.nas_api_interface import (
+    NasAPIInterface,
+)
 from neural_compressor.ux.components.db_manager.db_operations.optimization_api_interface import (
     OptimizationAPIInterface,
 )
@@ -49,6 +52,7 @@ _interfaces = [
     DictionariesAPIInterface,
     ExamplesAPIInterface,
     ModelAPIInterface,
+    NasAPIInterface,
     OptimizationAPIInterface,
     ProfilingAPIInterface,
     ProjectAPIInterface,

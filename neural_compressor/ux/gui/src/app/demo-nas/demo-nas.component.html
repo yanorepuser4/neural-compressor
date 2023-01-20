@@ -1,0 +1,33 @@
+<h2>Demo NAS</h2>
+<p>Here you can run NAS demo. The results are presented on the chart when the execution is finished. It may take a
+  couple of hours depending on the size of the dataset.</p>
+
+<div class="content-container">
+
+  <table class="rounded nas-details">
+    <ng-container *ngFor="let param of executionData | keyvalue">
+      <tr *ngIf="param.key !== 'id' && param.key !== 'notes'">
+        <td class="header">{{ param.key | underscoreToSpace }}</td>
+        <td *ngIf="param.key === 'status'" [ngClass]="param.value">{{ param.value }}</td>
+        <td *ngIf="param.key !== 'status'">{{ param.value }}</td>
+      </tr>
+    </ng-container>
+  </table>
+
+  <img class="nas-result" [src]="imageToShow" alt="NAS result chart" *ngIf="imageToShow">
+</div>
+
+<ng-container *ngIf="!showProgressBar && !imageToShow">
+  <p class="center-container">
+    <button mat-raised-button [matTooltip]="'Run this demo'" color="accent" class="action-btn center"
+      (click)="runNAS()">
+      <img src="./../../assets/088a-start-solid-white.svg">
+      Run this demo
+    </button>
+  </p>
+</ng-container>
+
+<br>
+
+<mat-progress-bar color="accent" mode="indeterminate"
+  [style.display]="showProgressBar ? 'block' : 'none'"></mat-progress-bar>

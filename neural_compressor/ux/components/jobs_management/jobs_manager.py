@@ -26,7 +26,7 @@ from neural_compressor.ux.components.jobs_management.request import _Request, _R
 class _Job(Thread):
     """Job is a deffered target that may spawn subprocess."""
 
-    _supported_jobs_names = ["benchmark", "optimization", "profiling"]
+    _supported_jobs_names = ["benchmark", "optimization", "profiling", "nas"]
 
     def __init__(
         self,

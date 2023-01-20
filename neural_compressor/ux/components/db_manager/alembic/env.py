@@ -53,6 +53,7 @@ from neural_compressor.ux.components.db_manager.db_models.example import Example
 from neural_compressor.ux.components.db_manager.db_models.framework import Framework
 from neural_compressor.ux.components.db_manager.db_models.metric import Metric
 from neural_compressor.ux.components.db_manager.db_models.model import Model
+from neural_compressor.ux.components.db_manager.db_models.nas import NAS
 from neural_compressor.ux.components.db_manager.db_models.optimization import Optimization
 from neural_compressor.ux.components.db_manager.db_models.optimization_type import OptimizationType
 from neural_compressor.ux.components.db_manager.db_models.precision import Precision
