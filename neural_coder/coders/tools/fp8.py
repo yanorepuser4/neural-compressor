@@ -117,12 +117,17 @@ def fp8_add_swap(list_transformed_code, list_file_path):
         # case 4: xxx = xxx + xxx
         
         if cl.func_name == "forward": # only change things in forward
+            skip_bracket = False
+            if "+" in line_content and "[" in line_content and "]" in line_content:
+                if (line_content.find("[") < line_content.find("+")) and (line_content.find("+") < line_content.find("]")):
+                    skip_bracket = True
             if "+" in line_content \
                 and "=" in line_content \
                 and line_content.count("+") == 1 \
                 and ((line_content.count("(") == 0 and line_content.count(")") == 0) or (line_content.count("(") == 1 and line_content.count(")") == 1)) \
                 and ((line_content.find("=") < line_content.find("+")) or ("+=" in line_content)) \
-                and "..." not in line_content: 
+                and "..." not in line_content \
+                and not skip_bracket:
             # only 1 + and up to 1 () is currently supported, i.e. xxx = xxx + func(xxx + xxx) is not; multi-line is not
                 to_swap = True
                 if "+=" in line_content: # xxx += xxx
