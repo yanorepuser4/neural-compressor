@@ -23,6 +23,9 @@
   
   ops: &common_ops
     int8: ['Gather', 'MatMul', 'Attention', 'Conv', 'EmbedLayerNormalization', 'FusedConv', 'LSTM']
+    fp8_e5m2: ['Conv', 'Gemm', 'MatMul', 'Add', 'Mul', 'Div', 'EmbedLayerNormalization', 'LayerNormalization']
+    fp8_e4m3: ['Conv', 'Gemm', 'MatMul', 'Add', 'Mul', 'Div', 'EmbedLayerNormalization', 'LayerNormalization']
+    fp8_e3m4: ['Conv', 'Gemm', 'MatMul', 'Add', 'Mul', 'Div', 'EmbedLayerNormalization', 'LayerNormalization']
     fp32: ['*'] # '*' means all op types
   
   capabilities: &common_capabilities
