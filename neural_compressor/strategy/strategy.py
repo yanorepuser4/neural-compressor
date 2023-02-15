@@ -569,6 +569,7 @@ class TuneStrategy(object):
                 framework_specific_info.update({"approach": "post_training_dynamic_quant"})
             framework_specific_info.update({"deploy_path": os.path.dirname(self.deploy_path)})
             framework_specific_info.update({'workspace_path': self.cfg.tuning.workspace.path})
+            framework_specific_info.update({"precision": self.cfg.quantization.precision})
             framework_specific_info.update({'recipes': self.cfg.quantization.recipes})
             framework_specific_info.update(
                                 {'graph_optimization': OPTIONS[framework].graph_optimization})
@@ -577,6 +578,9 @@ class TuneStrategy(object):
                 framework_specific_info['backend'] == 'onnxrt_trt_ep':
                 framework_specific_info.update({'format': 'QDQ'})
                 framework = 'onnxrt_qdq'
+            if 'fp8' in self.cfg.quantization.precision:
+                framework = 'onnxrt_fp8'
+ 
         if framework == 'pytorch_ipex' or framework == 'pytorch' or framework == 'pytorch_fx':
             if self.cfg.model.backend == 'ipex':
                 self.cfg.model.framework = 'pytorch_ipex'
