@@ -24,10 +24,96 @@
   ops:
     int8: ['Conv', 'MatMul', 'Attention', 'Mul', 'Relu', 'Clip', 
         'LeakyRelu', 'Gather', 'Sigmoid', 'MaxPool', 'EmbedLayerNormalization',
-        'FusedConv', 'GlobalAveragePool', 'Add']     
+        'FusedConv', 'GlobalAveragePool', 'Add']
+    fp8_e5m2: ['Conv', 'Gemm', 'MatMul', 'Add', 'Mul', 'Div']
+    fp8_e4m3: ['Conv', 'Gemm', 'MatMul', 'Add', 'Mul', 'Div']
+    fp8_e3m4: ['Conv', 'Gemm', 'MatMul', 'Add', 'Mul', 'Div']
     fp32: ['*'] # '*' means all op types
   
   capabilities: &common_capabilities
+    fp8_e4m3: &cap_fp8_e4m3 {
+          'Conv': &cap_dynamic_fp8_e4m3_per_channel {
+            'weight': {
+                        'dtype': ['fp8_e4m3'],
+                        'scheme': ['rne'],
+                        'granularity': ['per_channel'],
+                        'algorithm': ['minmax']
+                        },
+            'activation': {
+                        'dtype': ['fp8_e4m3'],
+                        'scheme': ['rne'],
+                        'granularity': ['per_tensor'],
+                        'algorithm': ['minmax']
+                        },
+                    },
+          'Add': &cap_dynamic_fp8_e4m3_per_tensor {
+                      'weight': {
+                        'dtype': ['fp8_e4m3'],
+                        'scheme': ['rne'],
+                        'granularity': ['per_tensor'],
+                        'algorithm': ['minmax']
+                        },
+            'activation': {
+                        'dtype': ['fp8_e4m3'],
+                        'scheme': ['rne'],
+                        'granularity': ['per_tensor'],
+                        'algorithm': ['minmax']
+                        },
+                    },
+          'Gemm': *cap_dynamic_fp8_e4m3_per_tensor,
+          'MatMul': *cap_dynamic_fp8_e4m3_per_tensor,
+          'Mul': *cap_dynamic_fp8_e4m3_per_tensor, 
+          'Div': *cap_dynamic_fp8_e4m3_per_tensor,
+          }
+    fp8_e3m4: &cap_fp8_e4m3 {
+          'Conv': &cap_dynamic_fp8_e3m4_per_channel {
+            'weight': {
+                        'dtype': ['fp8_e3m4'],
+                        'scheme': ['rne'],
+                        'granularity': ['per_channel'],
+                        'algorithm': ['minmax']
+                        },
+            'activation': {
+                        'dtype': ['fp8_e3m4'],
+                        'scheme': ['rne'],
+                        'granularity': ['per_tensor'],
+                        'algorithm': ['minmax']
+                        },
+                    },
+          'Add': &cap_dynamic_fp8_e3m4_per_tensor {
+                      'weight': {
+                        'dtype': ['fp8_e3m4'],
+                        'scheme': ['rne'],
+                        'granularity': ['per_tensor'],
+                        'algorithm': ['minmax']
+                        },
+            'activation': {
+                        'dtype': ['fp8_e3m4'],
+                        'scheme': ['rne'],
+                        'granularity': ['per_tensor'],
+                        'algorithm': ['minmax']
+                        },
+                    },
+          'Gemm': *cap_dynamic_fp8_e3m4_per_tensor,
+          'MatMul': *cap_dynamic_fp8_e3m4_per_tensor                    
+          'Mul': *cap_dynamic_fp8_e3m4_per_tensor, 
+          'Div': *cap_dynamic_fp8_e3m4_per_tensor,
+          }
+    fp8_e5m2: &cap_fp8_e5m2 {
+          'Conv': &cap_fp8_e5m2_default {
+            'weight': {
+                        'dtype': ['fp8_e5m2'],
+                        },
+            'activation': {
+                        'dtype': ['fp8_e5m2'],
+                        },
+                    },
+          'Gemm': *cap_fp8_e5m2_default,
+          'Matmul': *cap_fp8_e5m2_default,
+          'Add': *cap_fp8_e5m2_default, 
+          'Mul': *cap_fp8_e5m2_default, 
+          'Div': *cap_fp8_e5m2_default,
+    }
     int8: &ref_1_6 {
           'FusedConv': &key_1_6_0 {
             'weight': {
@@ -117,6 +203,9 @@
     int8: ['Conv', 'MatMul', 'Attention', 'Mul', 'Relu', 'Clip',
         'LeakyRelu', 'Gather', 'Sigmoid', 'MaxPool', 'EmbedLayerNormalization',
         'FusedConv', 'GlobalAveragePool', 'Pad', 'Split', 'Add']
+    fp8_e5m2: ['Conv', 'Gemm', 'MatMul', 'Add', 'Mul', 'Div']
+    fp8_e4m3: ['Conv', 'Gemm', 'MatMul', 'Add', 'Mul', 'Div']
+    fp8_e3m4: ['Conv', 'Gemm', 'MatMul', 'Add', 'Mul', 'Div']
     fp32: ['*'] # '*' means all op types
 
   capabilities:
@@ -137,9 +226,29 @@
         'LeakyRelu', 'Gather', 'Sigmoid', 'MaxPool', 'EmbedLayerNormalization',
         'FusedConv', 'GlobalAveragePool', 'Pad', 'Split', 'Add', 'Squeeze',
         'Reshape', 'Concat', 'AveragePool', 'Unsqueeze', 'Transpose', 'Resize']
+    fp8_e5m2: ['Conv', 'Gemm', 'MatMul', 'Add', 'Mul', 'Div']
+    fp8_e4m3: ['Conv', 'Gemm', 'MatMul', 'Add', 'Mul', 'Div']
+    fp8_e3m4: ['Conv', 'Gemm', 'MatMul', 'Add', 'Mul', 'Div']
     fp32: ['*'] # '*' means all op types
 
   capabilities:
+    fp8_e5m2: *cap_fp8_e5m2
+    fp8_e4m3: {
+          'Conv': *cap_dynamic_fp8_e4m3_per_channel,
+          'Gemm': *cap_dynamic_fp8_e4m3_per_channel,
+          'MatMul': *cap_dynamic_fp8_e4m3_per_channel
+          'Add': *cap_dynamic_fp8_e4m3_per_tensor,
+          'Mul': *cap_dynamic_fp8_e4m3_per_tensor, 
+          'Div': *cap_dynamic_fp8_e4m3_per_tensor,
+          }
+    fp8_e3m4: {
+          'Conv': *cap_dynamic_fp8_e3m4_per_channel,
+          'Gemm': *cap_dynamic_fp8_e3m4_per_channel,
+          'MatMul': *cap_dynamic_fp8_e3m4_per_channel
+          'Add': *cap_dynamic_fp8_e3m4_per_tensor,
+          'Mul': *cap_dynamic_fp8_e3m4_per_tensor, 
+          'Div': *cap_dynamic_fp8_e3m4_per_tensor,
+          }
     int8: &ref_1_8 {
           'FusedConv': {
             'weight': {
@@ -229,6 +338,23 @@
     <<: *common_ops
 
   capabilities:
+    fp8_e5m2: *cap_fp8_e5m2
+    fp8_e4m3: {
+          'Conv': *cap_dynamic_fp8_e4m3_per_channel,
+          'Gemm': *cap_dynamic_fp8_e4m3_per_channel,
+          'MatMul': *cap_dynamic_fp8_e4m3_per_channel
+          'Add': *cap_dynamic_fp8_e4m3_per_tensor,
+          'Mul': *cap_dynamic_fp8_e4m3_per_tensor, 
+          'Div': *cap_dynamic_fp8_e4m3_per_tensor,
+          }
+    fp8_e3m4: {
+          'Conv': *cap_dynamic_fp8_e3m4_per_channel,
+          'Gemm': *cap_dynamic_fp8_e3m4_per_channel,
+          'MatMul': *cap_dynamic_fp8_e3m4_per_channel
+          'Add': *cap_dynamic_fp8_e3m4_per_tensor,
+          'Mul': *cap_dynamic_fp8_e3m4_per_tensor, 
+          'Div': *cap_dynamic_fp8_e3m4_per_tensor,
+          }
     int8: &ref_1_9 {
           'FusedConv': {
             'weight': {
@@ -335,12 +461,29 @@
         'FusedConv', 'GlobalAveragePool', 'Pad', 'Split', 'Add', 'Squeeze',
         'Reshape', 'Concat', 'AveragePool', 'Unsqueeze', 'Transpose', 'ArgMax',
         'Gemm', 'Resize']
-    fp8_e5m2: ['Conv', 'Gemm', 'MatMul', 'Add', 'Mul', 'Div', 'EmbedLayerNormalization', 'LayerNormalization']
-    fp8_e4m3: ['Conv', 'Gemm', 'MatMul', 'Add', 'Mul', 'Div', 'EmbedLayerNormalization', 'LayerNormalization']
-    fp8_e3m4: ['Conv', 'Gemm', 'MatMul', 'Add', 'Mul', 'Div', 'EmbedLayerNormalization', 'LayerNormalization']
+    fp8_e5m2: ['Conv', 'Gemm', 'MatMul', 'Add', 'Mul', 'Div']
+    fp8_e4m3: ['Conv', 'Gemm', 'MatMul', 'Add', 'Mul', 'Div']
+    fp8_e3m4: ['Conv', 'Gemm', 'MatMul', 'Add', 'Mul', 'Div']
     fp32: ['*'] # '*' means all op types
 
   capabilities:
+    fp8_e5m2: *cap_fp8_e5m2
+    fp8_e4m3: {
+          'Conv': *cap_dynamic_fp8_e4m3_per_channel,
+          'Gemm': *cap_dynamic_fp8_e4m3_per_channel,
+          'MatMul': *cap_dynamic_fp8_e4m3_per_channel
+          'Add': *cap_dynamic_fp8_e4m3_per_tensor,
+          'Mul': *cap_dynamic_fp8_e4m3_per_tensor, 
+          'Div': *cap_dynamic_fp8_e4m3_per_tensor,
+          }
+    fp8_e3m4: {
+          'Conv': *cap_dynamic_fp8_e3m4_per_channel,
+          'Gemm': *cap_dynamic_fp8_e3m4_per_channel,
+          'MatMul': *cap_dynamic_fp8_e3m4_per_channel
+          'Add': *cap_dynamic_fp8_e3m4_per_tensor,
+          'Mul': *cap_dynamic_fp8_e3m4_per_tensor, 
+          'Div': *cap_dynamic_fp8_e3m4_per_tensor,
+          }
     int8: &ref_1_11 {
           'FusedConv': {
             'weight': {

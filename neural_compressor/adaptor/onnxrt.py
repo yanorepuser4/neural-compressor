@@ -27,7 +27,7 @@ from packaging.version import Version
 from importlib.util import find_spec
 from neural_compressor.adaptor.adaptor import adaptor_registry, Adaptor
 from neural_compressor.adaptor.query import QueryBackendCapability
-from neural_compressor.adaptor.ox_utils.util import PROVIDERS, ONNXRT_BACKENDS
+from neural_compressor.adaptor.ox_utils.util import PROVIDERS, ONNXRT_BACKENDS, find_by_name
 from neural_compressor.utils.utility import LazyImport, dump_elapsed_time, \
                                             GLOBAL_STATE, MODE
 from neural_compressor.utils.utility import Statistics
@@ -39,6 +39,8 @@ import sys
 
 onnx = LazyImport("onnx")
 ort = LazyImport("onnxruntime")
+torch = LazyImport("torch")
+torch = LazyImport("torch")
 ONNXRT152_VERSION = Version("1.5.2")
 ONNXRT170_VERSION = Version("1.7.0")
 ONNXRT112_VERSION = Version("1.12.0")
@@ -61,6 +63,7 @@ class ONNXRUNTIMEAdaptor(Adaptor):
         self.static = framework_specific_info["approach"] == "post_training_static_quant"
         self.dynamic = framework_specific_info["approach"] == "post_training_dynamic_quant"
         self.backend = PROVIDERS[framework_specific_info["backend"]]
+        self.precision = framework_specific_info['precision']
 
         if self.backend not in ort.get_all_providers():
             logger.warning("{} backend is not supported in current environment, "
@@ -984,6 +987,437 @@ class ONNXRUNTIMEAdaptor(Adaptor):
         """
         model.save(os.path.join(path, "best_model.onnx"))
 
+@adaptor_registry
+class ONNXRT_FP8Adaptor(ONNXRUNTIMEAdaptor):
+    """Adaptor of ONNXRT FP8 framework.
+    Args:
+        framework_specific_info (dict): dictionary of tuning configure from yaml file.
+    """
+    def __init__(self, framework_specific_info):
+        super().__init__(framework_specific_info)
+
+    def query_fw_capability(self, model):
+        """The function is used to query framework capability.
+        TODO: will be replaced by framework query API
+
+        Args:
+            model: onnx model
+
+        Returns:
+            (dict): quantization capability
+        """
+        # optype_wise and op_wise capability
+        self._pre_optimize(model)
+        exclude_first_quantizable_op = True if 'first_conv_or_matmul_quantization' in \
+            self.recipes and not self.recipes['first_conv_or_matmul_quantization'] \
+            else False
+        exclude_last_quantizable_op = True if 'last_conv_or_matmul_quantization' in \
+            self.recipes and not self.recipes['last_conv_or_matmul_quantization'] \
+            else False
+        exclude_pre_post_process = True if 'pre_post_process_quantization' in \
+            self.recipes and not self.recipes['pre_post_process_quantization'] \
+            else False
+ 
+        quantizable_optype = set([i.op_type for i in self.pre_optimized_model.nodes()])
+        optype_wise = OrderedDict()
+        op_wise = OrderedDict()
+        for query in [self.query_handler, self.query_handler_ext]:
+            if query is None:
+                continue
+            precisions = query.get_precisions()
+
+            for precision in precisions:
+                if 'fp8' not in precision:
+                    continue
+                # get supported optype for target precision
+                optypes = query.get_op_types_by_precision(precision) if \
+                    query.get_op_types_by_precision(precision) != ['*'] else \
+                    optype_wise.keys()
+ 
+                if self.backend in query.get_quantization_capability():
+                    configs = query.get_quantization_capability()[self.backend] if \
+                        precision in query.get_quantization_capability() else \
+                        {'default': {'weight': {'dtype': precision}, 'activation': {'dtype': precision}}}
+                else:
+                    continue
+
+                for op in optypes:
+                    if op not in quantizable_optype:
+                        continue
+                    if op not in configs:
+                        if 'default' in configs:
+                            op_capability = copy.deepcopy(configs['default'])
+                        else:
+                            continue
+                    else:
+                        op_capability = copy.deepcopy(configs[op])
+
+                    if precision != 'fp32':
+                        if self.static:
+                            op_capability['activation']['quant_mode'] = 'static'
+                        elif self.dynamic:
+                            op_capability['activation']['quant_mode'] = 'dynamic'
+                        elif query == self.query_handler: # query static capability for auto
+                            op_capability['activation']['quant_mode'] = 'static'
+                        elif query == self.query_handler_ext: # query dynamic capability for auto
+                            op_capability['activation']['quant_mode'] = 'dynamic'
+
+                    if op not in optype_wise.keys():
+                        optype_wise[op] = [op_capability]
+                    elif op_capability not in optype_wise[op]:
+                        optype_wise[op].append(op_capability)
+
+        first_quantizable_node = []
+        last_quantizable_node = []
+        all_conv_matmul = []
+        for _, node in enumerate(self.pre_optimized_model.nodes()):
+            if node.op_type in ['Conv', 'MatMul']:
+                # get first Conv or MatMul node
+                if exclude_first_quantizable_op:
+                    if len(first_quantizable_node) == 0:
+                        first_quantizable_node.append(node.name)
+                
+                # get last Conv or MatMul node
+                if exclude_last_quantizable_op:
+                    if len(last_quantizable_node) != 0:
+                        last_quantizable_node.pop()
+                    last_quantizable_node.append(node.name)
+
+                # get first and last Conv or MatMul node
+                if exclude_pre_post_process:
+                    if len(first_quantizable_node) == 0:
+                        first_quantizable_node.append(node.name)
+                    if len(last_quantizable_node) != 0:
+                        last_quantizable_node.pop()
+                    last_quantizable_node.append(node.name)
+                    all_conv_matmul.append(node)
+
+        for _, node in enumerate(self.pre_optimized_model.nodes()):
+            if node.op_type in optype_wise:
+                if (exclude_first_quantizable_op and node.name in first_quantizable_node) \
+                     or (exclude_last_quantizable_op and node.name in last_quantizable_node):
+                    tmp_cfg = copy.deepcopy(optype_wise[node.op_type])
+                    tmp_cfg = list(filter(lambda x:'quant_mode' not in x['activation'], tmp_cfg))
+                    op_wise.update({(node.name, node.op_type): tmp_cfg})
+                    continue
+                op_wise.update(
+                    {(node.name, node.op_type): copy.deepcopy(optype_wise[node.op_type])})
+
+        if exclude_pre_post_process:
+            from collections import deque
+            
+            # get nodes between first quantizable node and last quantizable node
+            backbone_queue = deque(last_quantizable_node)
+            backbone_nodes = self.pre_optimized_model.get_nodes_chain(backbone_queue, first_quantizable_node)
+
+            # get extra Conv or MatMul nodes not between first quantizable node and last quantizable node
+            backbone_queue_extra = deque()
+            for conv_or_matmul in all_conv_matmul:
+                if conv_or_matmul.name not in backbone_nodes:
+                    backbone_queue_extra.append(conv_or_matmul.name)
+                    backbone_nodes = self.pre_optimized_model.get_nodes_chain(backbone_queue_extra, 
+                                                    first_quantizable_node, backbone_nodes)
+            backbone_nodes += [i for i in first_quantizable_node]
+
+            for _, node in enumerate(self.pre_optimized_model.nodes()):
+                if node.op_type in optype_wise:
+                    # nodes not in backbone are not quantized
+                    if node.name not in backbone_nodes:
+                        tmp_cfg = copy.deepcopy(optype_wise[node.op_type])
+                        tmp_cfg = list(filter(lambda x:'quant_mode' not in x['activation'], tmp_cfg))
+                        op_wise.update({(node.name, node.op_type): tmp_cfg})
+                        continue
+                    if (node.name, node.op_type) in op_wise:
+                        op_wise.update(
+                            {(node.name, node.op_type): copy.deepcopy(op_wise[(node.name, node.op_type)])})
+                    else: # pragma: no cover
+                        op_wise.update(
+                            {(node.name, node.op_type): copy.deepcopy(optype_wise[node.op_type])})
+
+        return {'optypewise': optype_wise, 'opwise': op_wise}
+
+    def _fp8_quantize(self, model, op_config, params):
+        from mpemu.pytquant.cpp import fpemu_cpp
+        from onnxruntime_extensions import (
+            onnx_op, PyCustomOpDef, make_onnx_model,
+            get_library_path as _get_library_path)
+        from onnx import helper, numpy_helper, onnx_pb as onnx_proto
+        if self.precision == 'fp8_e5m2':
+            scale = 1.0
+            dtype = 'E5M2'
+        else:
+            scale = None
+            dtype = self.precision.split('_')[-1].upper()
+
+        @onnx_op(op_type="FP8_converter_2",
+                 inputs=[PyCustomOpDef.dt_float, PyCustomOpDef.dt_float])
+        def FP8_converter_2(x, y):
+            input = torch.from_numpy(x)
+            size = input.nelement()
+            outputs = fpemu_cpp.fpemu_cpp.forward(input.contiguous(), 'E5M2_RNE', size, False, y)
+            output = outputs[0]
+            return output.cpu().detach().numpy()
+
+        @onnx_op(op_type="FP8_converter_1",
+                 inputs=[PyCustomOpDef.dt_float])
+        def FP8_converter_1(x):
+            input = torch.from_numpy(x)
+            size = input.nelement()
+            outputs = fpemu_cpp.fpemu_cpp.forward(input.contiguous(), 'E5M2_RNE', size, False, 1.0)
+            output = outputs[0]
+            return output.cpu().detach().numpy()
+
+        add_nodes = []
+        add_inits = []
+        for node in model.graph.node:
+            if node.name in op_config:
+                for idx, inp in enumerate(node.input):
+                    init = find_by_name(inp, model.graph.initializer)
+                    if init is not None:
+                        array = numpy_helper.to_array(init)
+                        input = torch.from_numpy(array)
+                        size = input.nelement()
+                        outputs = fpemu_cpp.fpemu_cpp.forward(input.contiguous(), 'E5M2_RNE', size, False, 1.0)
+                        output = outputs[0]
+                        init.float_data[:] = []
+                        init.int32_data[:] = []
+                        init.raw_data = output.cpu().detach().numpy().tostring()
+                    elif self.precision == 'fp8_e5m2':
+                        new = helper.make_node('FP8_converter_1', [inp], ['output_'+str(len(add_nodes))],
+                                              domain='ai.onnx.contrib')
+                        node.input[idx] = 'output_'+str(len(add_nodes))
+                        add_nodes.append(new)
+                    else:
+                        new = helper.make_node('FP8_converter_2', [inp], ['output_'+str(len(add_nodes))],
+                                              domain='ai.onnx.contrib')
+                        node.input[idx] = 'output_'+str(len(add_nodes))
+                        add_nodes.append(new)
+            else:
+                add_nodes.append(node)
+
+        graph = helper.make_graph(add_nodes, 'fp8_model', model.graph.input, model.graph.output, model.graph.initializer)
+        new_model = make_onnx_model(graph)
+        new_model.opset_import[0].version = 13
+        return new_model
+
+    @dump_elapsed_time("Pass quantize model")
+    def quantize(self, tune_cfg, model, data_loader, q_func=None):
+        """The function is used to do calibration and quanitization in post-training
+           quantization.
+
+        Args:
+            tune_cfg (dict):     quantization config.
+            model (object):      model need to do quantization.
+            data_loader (object): calibration dataset.
+            q_func (optional):   training function for quantization aware training mode,
+                                 unimplement yet for onnx.
+
+        Returns:
+            (dict): quantized model
+        """
+        assert q_func is None, "quantization aware training has not been supported on ONNXRUNTIME"
+        model = self.pre_optimized_model if self.pre_optimized_model else model
+        ort_version = Version(ort.__version__)
+        if ort_version < ONNXRT152_VERSION: # pragma: no cover
+            logger.warning("Quantize input needs onnxruntime 1.5.2 or newer.")
+            return model
+        if model.model.opset_import[0].version < 11: # pragma: no cover
+            logger.warning("Quantize input needs model opset 11 or newer.")
+        from neural_compressor.adaptor.ox_utils.util import QuantizationMode
+        if self.static:
+            self._prepare_observer(q_model._model, model_qconfig_dict)
+            #self._calibration_for_scale(q_model._model, dataloader, model_qconfig_dict)
+        else:
+            format = QuantizationMode.IntegerOps
+
+        self.quantizable_ops = self._query_quantizable_ops(model.model)
+        tmp_model = copy.deepcopy(model)
+
+        quantize_config = self._cfg_to_quantize_config(tune_cfg)
+        iterations = tune_cfg.get('calib_iteration', 1)
+        calib_sampling_size = tune_cfg.get('calib_sampling_size', 1)
+        if not self.dynamic:
+            if isinstance(data_loader, BaseDataLoader):
+                batch_size = data_loader.batch_size
+                try:
+                    for i in range(batch_size):
+                        if calib_sampling_size % (batch_size - i) == 0:
+                            calib_batch_size = batch_size - i
+                            if i != 0:  # pragma: no cover
+                                logger.warning("Reset `calibration.dataloader.batch_size` field "
+                                               "to {}".format(calib_batch_size) +
+                                               " to make sure the sampling_size is "
+                                               "divisible exactly by batch size")
+                            break
+                    tmp_iterations = int(math.ceil(calib_sampling_size / calib_batch_size))
+                    data_loader.batch(calib_batch_size)
+                    quantize_params = self._get_quantize_params(tmp_model, data_loader, \
+                                                                quantize_config, tmp_iterations)
+                except Exception as e:  # pragma: no cover
+                    if 'Got invalid dimensions for input' in str(e):
+                        logger.warning("Please set sampling_size to a multiple of {}".format(
+                            str(e).partition('Expected: ')[2].partition('\n')[0]))
+                        exit(0)
+                    logger.warning(
+                        "Fail to forward with batch size={}, set to {} now.".
+                        format(batch_size, 1))
+                    data_loader.batch(1)
+                    quantize_params = self._get_quantize_params(tmp_model, data_loader, \
+                                              quantize_config, calib_sampling_size)
+            else:  # pragma: no cover
+                if hasattr(data_loader, 'batch_size') and \
+                  calib_sampling_size % data_loader.batch_size != 0:
+                    logger.warning(
+                        "Please note that calibration sampling size {} " \
+                        "isn't divisible exactly by batch size {}. " \
+                        "So the real sampling size is {}.".
+                        format(calib_sampling_size, data_loader.batch_size,
+                               data_loader.batch_size * iterations))
+                quantize_params = self._get_quantize_params(tmp_model, data_loader, \
+                                          quantize_config, iterations)
+        else:
+            quantize_params = None
+        self.quantize_params = quantize_params
+        from neural_compressor.adaptor.ox_utils.quantizer import Quantizer
+        quantizer = Quantizer(copy.deepcopy(model),
+            quantize_config,
+            format,
+            self.static,
+            quantize_params,
+            self.quantizable_op_types,
+            self.query_handler.get_fallback_list(),
+            self.reduce_range)
+        quantizer.quantize_model()
+        tmp_model.q_config = self._generate_qconfig(model.model, tune_cfg, quantize_params)
+        tmp_model.model = quantizer.model.model
+        self.quantize_config = quantize_config # update so other methods can know current configs
+
+        self._dump_model_op_stats(tmp_model)
+        tmp_model.topological_sort()
+        return tmp_model
+
+    def evaluate(self, input_graph, dataloader, postprocess=None,
+                 metrics=None, measurer=None, iteration=-1,
+                 tensorboard=False, fp32_baseline=False):
+        """The function is for evaluation if no given eval func
+
+        Args:
+            input_graph      : onnx model for evaluation
+            dataloader       : dataloader for evaluation. neural_compressor.data.dataloader.ONNXDataLoader
+            postprocess      : post-process for evalution. neural_compressor.data.transform.ONNXTransforms
+            metrics:         : metrics for evaluation. neural_compressor.metric.ONNXMetrics
+            measurer         : neural_compressor.objective.Measurer
+            iteration(int)   : max iterations of evaluaton.
+            tensorboard(bool): whether to use tensorboard for visualizaton
+            fp32_baseline (boolen, optional): only for compare_label=False pipeline
+
+        Returns:
+            (float) evaluation results. acc, f1 e.g.
+        """
+        if input_graph.large_size: # pragma: no cover
+            onnx.save_model(input_graph.model,
+                            self.work_space + 'eval.onnx',
+                            save_as_external_data=True,
+                            all_tensors_to_one_file=True,
+                            location="weights.pb",
+                            convert_attribute=False)
+        sess_options = ort.SessionOptions()
+        if self.backend == 'TensorrtExecutionProvider':
+            sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL 
+        if measurer:
+            # https://github.com/microsoft/onnxruntime/issues/7347
+            cores_per_instance = int(os.environ.get('CORES_PER_INSTANCE'))
+            assert cores_per_instance > 0, "benchmark cores_per_instance should greater than 0"
+            sess_options.intra_op_num_threads = cores_per_instance
+
+        from onnxruntime_extensions import get_library_path
+        sess_options.register_custom_ops_library(get_library_path())
+        session = ort.InferenceSession(self.work_space + 'eval.onnx',
+                                       sess_options,
+                                       providers=[self.backend]) if input_graph.large_size else \
+                  ort.InferenceSession(input_graph.model.SerializeToString(),
+                                       sess_options,
+                                       providers=[self.backend])
+        results = []
+        if metrics:
+            for metric in metrics:
+                metric.reset()
+            self.fp32_preds_as_label = any([hasattr(metric, "compare_label") and \
+                not metric.compare_label for metric in metrics]) 
+
+        ort_inputs = {}
+        len_inputs = len(session.get_inputs())
+        inputs_names = [session.get_inputs()[i].name for i in range(len_inputs)]
+
+        def eval_func(dataloader):
+            for idx, (inputs, labels) in enumerate(dataloader):
+                if not isinstance(labels, list):
+                    labels = [labels]
+                if len_inputs == 1:
+                    ort_inputs.update(
+                        inputs if isinstance(inputs, dict) else {inputs_names[0]: inputs}
+                    )
+                else:
+                    assert len_inputs == len(inputs), \
+                        'number of input tensors must align with graph inputs'
+
+                    if isinstance(inputs, dict):  # pragma: no cover
+                        ort_inputs.update(inputs)
+                    else:
+                        for i in range(len_inputs):
+                            # in case dataloader contains non-array input
+                            if not isinstance(inputs[i], np.ndarray):
+                                ort_inputs.update({inputs_names[i]: np.array(inputs[i])})
+                            else:
+                                ort_inputs.update({inputs_names[i]: inputs[i]})
+
+                if measurer is not None:
+                    measurer.start()
+                    predictions = session.run(None, ort_inputs, providers=[self.backend])
+                    measurer.end()
+                else:
+                    predictions = session.run(None, ort_inputs, providers=[self.backend])
+
+                if self.fp32_preds_as_label:
+                    self.fp32_results.append(predictions) if fp32_baseline else \
+                        results.append(predictions)
+
+                if postprocess is not None:
+                    predictions, labels = postprocess((predictions, labels))
+                if metrics:
+                    for metric in metrics:
+                        if not hasattr(metric, "compare_label") or \
+                            (hasattr(metric, "compare_label") and metric.compare_label):
+                            metric.update(predictions, labels)
+                if idx + 1 == iteration:
+                    break
+
+        if isinstance(dataloader, BaseDataLoader) and not self.benchmark:
+            try:
+                eval_func(dataloader)
+            except Exception:  # pragma: no cover
+                logger.warning(
+                    "Fail to forward with batch size={}, set to {} now.".
+                    format(dataloader.batch_size, 1))
+                dataloader.batch(1)
+                eval_func(dataloader)
+        else:  # pragma: no cover
+            eval_func(dataloader)
+
+        if self.fp32_preds_as_label:
+            from neural_compressor.adaptor.ox_utils.util import collate_preds
+            if fp32_baseline:
+                results = collate_preds(self.fp32_results)
+                reference = results
+            else:
+                reference = collate_preds(self.fp32_results)
+                results = collate_preds(results)
+            for metric in metrics:
+                if hasattr(metric, "compare_label") and not metric.compare_label:
+                    metric.update(results, reference)
+
+        acc = 0 if metrics is None else [metric.result() for metric in metrics]
+        return acc if not isinstance(acc, list) or len(acc) > 1 else acc[0]
 
 @adaptor_registry
 class ONNXRT_QLinearOpsAdaptor(ONNXRUNTIMEAdaptor):
