@@ -1181,7 +1181,7 @@ class ONNXRT_FP8Adaptor(ONNXRUNTIMEAdaptor):
                         init.raw_data = output.cpu().detach().numpy().tostring()
                     elif self.precision == 'fp8_e5m2':
                         new = helper.make_node('FP8_converter_1', [inp], ['fp8_output_'+str(len(add_nodes))],
-                                              domain='ai.onnx.contrib')
+                                              name='FP8_converter_1_'+str(len(add_nodes)), domain='ai.onnx.contrib')
                         node.input[idx] = 'fp8_output_'+str(len(add_nodes))
                         add_nodes.append(new)
                     #else:
@@ -1192,9 +1192,7 @@ class ONNXRT_FP8Adaptor(ONNXRUNTIMEAdaptor):
             add_nodes.append(node)
         graph = helper.make_graph(add_nodes, 'fp8_model', model.graph.input, model.graph.output, model.graph.initializer)
         new_model = make_onnx_model(graph)
-        new_model.opset_import[0].version = 13
 
-        import pdb;pdb.set_trace()
         return new_model
 
     @dump_elapsed_time("Pass quantize model")
