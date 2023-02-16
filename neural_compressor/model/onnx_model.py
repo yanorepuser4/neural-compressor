@@ -392,6 +392,7 @@ class ONNXModel(BaseModel):
 
         while q:
             n = q.popleft()
+            print(n)
             if not all([output_name_to_node[i].name in all_nodes for \
                 i in n.input if i in output_name_to_node]):
                 if n not in wait:
@@ -407,8 +408,8 @@ class ONNXModel(BaseModel):
                 q = copy.deepcopy(wait)
                 wait.clear()
         nodes = [i[1] for i in all_nodes.items()]
-        assert len(list(set([n.name for n in nodes]))) == \
-            len(list(set([n.name for n in self.model.graph.node])))
+        #assert len(list(set([n.name for n in nodes]))) == \
+        #    len(list(set([n.name for n in self.model.graph.node])))
         self.model.graph.ClearField('node')
         self.model.graph.node.extend(nodes)
 

@@ -134,7 +134,7 @@ class TuneStrategy(object):
         GLOBAL_STATE.STATE = MODE.QUANTIZATION
         framework, framework_specific_info = self.set_framework_info(q_dataloader, q_func)
         self.adaptor = FRAMEWORKS[framework](framework_specific_info)
-        self.framework = framework
+        self.framework = framework if framework != 'onnxrt_fp8' else 'onnxrt_qoperator'
 
         self.set_q_func()
         self.set_objectives()

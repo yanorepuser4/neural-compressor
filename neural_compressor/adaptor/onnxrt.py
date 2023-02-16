@@ -1027,19 +1027,16 @@ class ONNXRT_FP8Adaptor(ONNXRUNTIMEAdaptor):
             precisions = query.get_precisions()
 
             for precision in precisions:
-                if 'fp8' not in precision:
+                if precision != self.precision:
                     continue
                 # get supported optype for target precision
                 optypes = query.get_op_types_by_precision(precision) if \
                     query.get_op_types_by_precision(precision) != ['*'] else \
                     optype_wise.keys()
  
-                if self.backend in query.get_quantization_capability():
-                    configs = query.get_quantization_capability()[self.backend] if \
-                        precision in query.get_quantization_capability() else \
-                        {'default': {'weight': {'dtype': precision}, 'activation': {'dtype': precision}}}
-                else:
-                    continue
+                configs = query.get_quantization_capability()[precision] if \
+                    precision in query.get_quantization_capability() else \
+                    {'default': {'weight': {'dtype': precision}, 'activation': {'dtype': precision}}}
 
                 for op in optypes:
                     if op not in quantizable_optype:
@@ -1163,7 +1160,7 @@ class ONNXRT_FP8Adaptor(ONNXRUNTIMEAdaptor):
         def FP8_converter_1(x):
             input = torch.from_numpy(x)
             size = input.nelement()
-            outputs = fpemu_cpp.fpemu_cpp.forward(input.contiguous(), 'E5M2_RNE', size, False, 1.0)
+            outputs = fpemu_cpp.fpemu_cpp.forward(input.contiguous(), 'E5M2_RNE', size, False, 1.0, False, 1)
             output = outputs[0]
             return output.cpu().detach().numpy()
 
@@ -1177,7 +1174,7 @@ class ONNXRT_FP8Adaptor(ONNXRUNTIMEAdaptor):
                         array = numpy_helper.to_array(init)
                         input = torch.from_numpy(array)
                         size = input.nelement()
-                        outputs = fpemu_cpp.fpemu_cpp.forward(input.contiguous(), 'E5M2_RNE', size, False, 1.0)
+                        outputs = fpemu_cpp.fpemu_cpp.forward(input.contiguous(), 'E5M2_RNE', size, False, 1.0, False, 1)
                         output = outputs[0]
                         init.float_data[:] = []
                         init.int32_data[:] = []
@@ -1192,12 +1189,12 @@ class ONNXRT_FP8Adaptor(ONNXRUNTIMEAdaptor):
                     #                          domain='ai.onnx.contrib')
                     #    node.input[idx] = 'output_'+str(len(add_nodes))
                     #    add_nodes.append(new)
-            else:
-                add_nodes.append(node)
-
+            add_nodes.append(node)
         graph = helper.make_graph(add_nodes, 'fp8_model', model.graph.input, model.graph.output, model.graph.initializer)
         new_model = make_onnx_model(graph)
         new_model.opset_import[0].version = 13
+
+        import pdb;pdb.set_trace()
         return new_model
 
     @dump_elapsed_time("Pass quantize model")
@@ -1292,7 +1289,7 @@ class ONNXRT_FP8Adaptor(ONNXRUNTIMEAdaptor):
         #tmp_model.q_config = self._generate_qconfig(model.model, tune_cfg, quantize_params)
         #tmp_model.model = quantizer.model.model
         #self.quantize_config = quantize_config # update so other methods can know current configs
-        tmp_model.model = self._fp8_quantize(model, quantize_config, quantize_params)
+        tmp_model.model = self._fp8_quantize(model.model, quantize_config, quantize_params)
         self._dump_model_op_stats(tmp_model)
         tmp_model.topological_sort()
         return tmp_model
@@ -1403,10 +1400,10 @@ class ONNXRT_FP8Adaptor(ONNXRUNTIMEAdaptor):
 
                 if measurer is not None:
                     measurer.start()
-                    predictions = session.run(None, ort_inputs, providers=[self.backend])
+                    predictions = session.run(None, ort_inputs)
                     measurer.end()
                 else:
-                    predictions = session.run(None, ort_inputs, providers=[self.backend])
+                    predictions = session.run(None, ort_inputs)
 
                 if self.fp32_preds_as_label:
                     self.fp32_results.append(predictions) if fp32_baseline else \

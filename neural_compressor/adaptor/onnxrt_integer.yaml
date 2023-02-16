@@ -18,7 +18,7 @@
     name: '1.6.0'
   
   precisions: &common_precisions
-    names: int8, uint8, fp32
+    names: int8, uint8, fp8_e5m2, fp8_e4m3, fp8_e3m4, fp32
     valid_mixed_precisions: []
   
   ops: &common_ops
@@ -107,7 +107,7 @@
                         },
                     },
           'Gemm': *cap_fp8_e5m2_default,
-          'Matmul': *cap_fp8_e5m2_default,
+          'MatMul': *cap_fp8_e5m2_default,
           'Add': *cap_fp8_e5m2_default, 
           'Mul': *cap_fp8_e5m2_default, 
           'Div': *cap_fp8_e5m2_default,
@@ -174,7 +174,7 @@
     CUDAExecutionProvider: *ref_1_6
 
   graph_optimization: &default_optimization # from onnxruntime graph_optimization_level
-    level: 'ENABLE_EXTENDED'         # choices are ['DISABLE_ALL', 'ENABLE_BASIC', 'ENABLE_EXTENDED', 'ENABLE_ALL']    
+    level: 'ENABLE_BASIC'         # choices are ['DISABLE_ALL', 'ENABLE_BASIC', 'ENABLE_EXTENDED', 'ENABLE_ALL']    
 -
   version:
     name: '1.8.0'
@@ -186,6 +186,7 @@
     <<: *common_ops
 
   capabilities:
+    fp8_e5m2: *cap_fp8_e5m2 
     fp8_e4m3: {
           'Conv': *cap_dynamic_fp8_e4m3_per_channel,
           'Gemm': *cap_dynamic_fp8_e4m3_per_channel,
@@ -276,6 +277,7 @@
     <<: *common_ops
 
   capabilities:
+    fp8_e5m2: *cap_fp8_e5m2
     fp8_e4m3: {
           'Conv': *cap_dynamic_fp8_e4m3_per_channel,
           'Gemm': *cap_dynamic_fp8_e4m3_per_channel,
