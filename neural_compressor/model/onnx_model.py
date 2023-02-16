@@ -392,7 +392,6 @@ class ONNXModel(BaseModel):
 
         while q:
             n = q.popleft()
-            print(n)
             if not all([output_name_to_node[i].name in all_nodes for \
                 i in n.input if i in output_name_to_node]):
                 if n not in wait:
