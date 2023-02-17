@@ -3646,6 +3646,8 @@ class PyTorch_FP8Adaptor(TemplateAdaptor):
             'mul': EltwiseMul, 
             'div': EltwiseDiv, 
         }
+        # Right now, mix precision is specific: E3M4 for weight and E4M3 for activation
+        self.mix_precision = os.getenv('MIX_PRECISION')
         op_type_list = os.getenv('FP8_OP_TYPE_LIST')
         self.white_list = []
         if op_type_list:
@@ -3727,6 +3729,9 @@ class PyTorch_FP8Adaptor(TemplateAdaptor):
             # skip fallbacked module
             if dtype_w == 'fp32' and dtype_i == 'fp32':
                 continue
+            # Experimental feature.
+            if self.mix_precision:
+                dtype_w, dtype_i = 'fp8_e3m4', 'fp8_e4m3'
             # TODO： FP8_E5M2 Precision from strategy need to split for weight and activation
             # Here is a workaround for Embedding and EmbeddingBag.
             if k[1] in ['Embedding', 'EmbeddingBag']:
