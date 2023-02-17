@@ -65,7 +65,7 @@
           'Mul': *cap_dynamic_fp8_e4m3_per_tensor, 
           'Div': *cap_dynamic_fp8_e4m3_per_tensor,
           }
-    fp8_e3m4: {
+    fp8_e3m4: &cap_fp8_e3m4 {
           'Conv': &cap_dynamic_fp8_e3m4_per_channel {
             'weight': {
                         'dtype': ['fp8_e3m4'],
