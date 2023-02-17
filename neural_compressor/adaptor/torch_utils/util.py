@@ -753,6 +753,9 @@ def get_mse_order_per_int8(adaptor, fp32_model, example_input, tune_cfg):
 
 # FP8: Single entry function for quantizing tensor.
 def quantize_tensor(tensor, qtconfig, scale=None, inplace=False):
+    if not isinstance(tensor, torch.Tensor):
+        return tensor
+
     qtconfig.check_validity(qtconfig.dtype, qtconfig.scheme)
     mode = qtconfig.dtype.upper()
 

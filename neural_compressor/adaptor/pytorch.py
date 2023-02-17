@@ -3742,12 +3742,15 @@ class PyTorch_FP8Adaptor(TemplateAdaptor):
 
     def _prepare_observer(self, model, model_qconfig_dict):
         def input_observer_forward_pre_hook(self, input):
-            output = self.input_activation_post_process(input[0])
-            if hasattr(self, 'input_activation_post_process1'):
-                output1 = self.input_activation_post_process1(input[1])
-                return (output, output1)
-            else:
-                return output
+            try:
+                if isinstance(input[0], torch.Tensor):
+                    self.input_activation_post_process(input[0])
+                if hasattr(self, 'input_activation_post_process1') and isinstance(input[1], torch.Tensor):
+                    self.input_activation_post_process1(input[1])
+                return input
+            except Exception as e:
+                # The KL algorithm may encounter a overflow error on EltwiseAdd.
+                pass
         ### Insert input observer into model, only for fp8_e4m3 static quantization ###
         for name, module in model.named_modules():
             op_type = str(module.__class__.__name__)
