@@ -9,7 +9,7 @@ The core algorithm code is in `neural_coder/coders/tools/fp8.py`, and the API in
 
 ### matmul/bmm
 
-Changes `torch.matmul` or `torch.bmm` to `Matmul, BatchMatmul` from `from mpemu.module_wrappers import Matmul, BatchMatmul`.
+Changes `torch.matmul, torch.bmm` to `Matmul, BatchMatmul` from `from mpemu.module_wrappers import Matmul, BatchMatmul`.
 
 - Algorithm code: https://github.com/intel/neural-compressor/blob/fp8_adaptor/neural_coder/coders/tools/fp8.py#L17-L99
 - API interface code: https://github.com/intel/neural-compressor/blob/fp8_adaptor/neural_coder/interface.py#L256-L281
