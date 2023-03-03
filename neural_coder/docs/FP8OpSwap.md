@@ -25,20 +25,30 @@ Changes `+` or `+=` to `EltwiseAdd` from `from mpemu.module_wrappers import Eltw
 
 The features are called `fp8_matmul_swap` and `fp8_add_swap` in Neural Coder. So for example, if you want to swap "matmul", then use `fp8_matmul_swap`.
 
-The usage is simple. If you want to swap "add (+, +=)" op for "transformers", then first git clone it as a folder called "transformers", and then execute below Python code in the directory where you git clone "transformers":
+The usage is simple. If you want to swap "add (+, +=)" op for "transformers", then first git clone it as a folder, and then execute below Python code (in the directory where you git clone):
 
 ```
 from neural_coder import enable
-enable(code="transformers", features=["fp8_add_swap"], consider_imports=False)
+enable(code="transformers", features=["fp8_add_swap"], consider_imports=False, overwrite=True)
 ```
 
-The patch location will be printed in the log output (e.g. `The patch has been saved to: xxx/xxx/xxxxxxxx.diff`).
-
-If you want to overwrite the code instead of generating patch, simply add `overwrite=True` argument in `enable` API.
-
-So, a simple BKC looks like this:
+So, a BKC to get the patch looks like this:
 
 ```
 git clone https://github.com/huggingface/transformers.git
-python -c 'from neural_coder import enable; enable(code="transformers", features=["fp8_add_swap"], consider_imports=False)'
+python -c 'from neural_coder import enable; enable(code="transformers", features=["fp8_add_swap"], consider_imports=False, overwrite=True)'
+cd transformers
+git diff
+```
+
+## Note
+
+(1) FP8 op swap feature is only currently located in `fp8_adaptor` branch, not in `master` branch, so you need to git clone INC, check out `fp8_adaptor` branch, and build from source in order to use it.
+(2) If you need to swap both "matmul" and "add", then simply execute both Python commands, like this:
+```
+git clone https://github.com/huggingface/transformers.git
+python -c 'from neural_coder import enable; enable(code="transformers", features=["fp8_matmul_swap"], consider_imports=False, overwrite=True)'
+python -c 'from neural_coder import enable; enable(code="transformers", features=["fp8_add_swap"], consider_imports=False, overwrite=True)'
+cd transformers
+git diff
 ```
