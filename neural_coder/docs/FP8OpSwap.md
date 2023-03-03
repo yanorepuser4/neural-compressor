@@ -41,6 +41,9 @@ cd transformers
 git diff > fp8.diff
 ```
 
+The patch looks like this:
+![image](https://user-images.githubusercontent.com/86637189/222628703-f6bdaa58-b939-4da0-9685-b3740326997a.png)
+
 ## Note
 
 1. FP8 op swap feature is only currently located in `fp8_adaptor` branch, not in `master` branch, so you need to git clone INC, check out `fp8_adaptor` branch, and build from source in order to use it.
