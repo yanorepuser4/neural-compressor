@@ -43,8 +43,8 @@ git diff
 
 ## Note
 
-(1) FP8 op swap feature is only currently located in `fp8_adaptor` branch, not in `master` branch, so you need to git clone INC, check out `fp8_adaptor` branch, and build from source in order to use it.
-(2) If you need to swap both "matmul" and "add", then simply execute both Python commands, like this:
+1. FP8 op swap feature is only currently located in `fp8_adaptor` branch, not in `master` branch, so you need to git clone INC, check out `fp8_adaptor` branch, and build from source in order to use it.
+2. If you need to swap both "matmul" and "add", then simply execute both Python commands, like this:
 ```
 git clone https://github.com/huggingface/transformers.git
 python -c 'from neural_coder import enable; enable(code="transformers", features=["fp8_matmul_swap"], consider_imports=False, overwrite=True)'
