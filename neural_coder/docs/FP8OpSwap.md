@@ -32,7 +32,7 @@ from neural_coder import enable
 enable(code="transformers", features=["fp8_add_swap"], consider_imports=False)
 ```
 
-Then you will see where the patch has been saved to in the log output.
+The patch location will be printed in the log output (e.g. `The patch has been saved to: xxx/xxx/xxxxxxxx.diff`).
 
 If you want to overwrite the code instead of generating patch, simply add `overwrite=True` argument in `enable` API.
 
