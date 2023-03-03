@@ -23,9 +23,9 @@ Changes `+` or `+=` to `EltwiseAdd` from `from mpemu.module_wrappers import Eltw
 
 ## Use Guide (BKC)
 
-The features are called `fp8_matmul_swap` and `fp8_add_swap` in Neural Coder. So for example, if you want to swap `matmul`, then use `fp8_matmul_swap`.
+The features are called `fp8_matmul_swap` and `fp8_add_swap` in Neural Coder. So for example, if you want to swap "matmul", then use `fp8_matmul_swap`.
 
-The usage is simple. If you want to swap `add` op for `transformers`, then first git clone it as a folder called `transformers`, and then execute below python code in the directory where you git clone `transformers`:
+The usage is simple. If you want to swap "add (+, +=)" op for "transformers", then first git clone it as a folder called "transformers", and then execute below Python code in the directory where you git clone "transformers":
 
 ```
 from neural_coder import enable
