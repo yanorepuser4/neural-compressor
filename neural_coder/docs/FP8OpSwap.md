@@ -38,7 +38,7 @@ So, a BKC to get the patch looks like this:
 git clone https://github.com/huggingface/transformers.git
 python -c 'from neural_coder import enable; enable(code="transformers", features=["fp8_add_swap"], consider_imports=False, overwrite=True)'
 cd transformers
-git diff
+git diff > fp8.diff
 ```
 
 ## Note
@@ -50,5 +50,6 @@ git clone https://github.com/huggingface/transformers.git
 python -c 'from neural_coder import enable; enable(code="transformers", features=["fp8_matmul_swap"], consider_imports=False, overwrite=True)'
 python -c 'from neural_coder import enable; enable(code="transformers", features=["fp8_add_swap"], consider_imports=False, overwrite=True)'
 cd transformers
-git diff
+git diff > fp8.diff
 ```
+3. The Python command execution might some time for huge libraries like transformers because there are thousands of swaps to be performed.
