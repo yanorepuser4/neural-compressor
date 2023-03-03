@@ -53,8 +53,6 @@ require_version(
 
 logger = logging.getLogger(__name__)
 
-FP32_CONFIG = {'activation':  {'dtype': ['fp32']}, 'weight': {'dtype': ['fp32']}}
-
 @dataclass
 class ModelArguments:
     """
@@ -472,17 +470,15 @@ def main():
         from neural_compressor import quantization, PostTrainingQuantConfig
         calib_dataset = SQuADDataset(eval_dataset, model, label_names=["start_positions", "end_positions"])
         fp32_op_names = None
-        if model_args.model_name_or_path == 'mrm8488/spanbert-finetuned-squadv1':
-            fp32_op_names = ['Gather_94', 'MatMul_660', 'MatMul_754', 'MatMul_848', 'MatMul_1036']
-        elif model_args.model_name_or_path == 'salti/bert-base-multilingual-cased-finetuned-squad':
-            fp32_op_names = ['MatMul_660', 'MatMul_566', 'Unsqueeze_91']
-        config = PostTrainingQuantConfig(approach='static',
-                                         op_name_list={op_name:FP32_CONFIG for op_name in fp32_op_names if fp32_op_names})
+        # if model_args.model_name_or_path == 'mrm8488/spanbert-finetuned-squadv1':
+        #     fp32_op_names = ['Gather_94', 'MatMul_660', 'MatMul_754', 'MatMul_848', 'MatMul_1036']
+        # elif model_args.model_name_or_path == 'salti/bert-base-multilingual-cased-finetuned-squad':
+        #     fp32_op_names = ['MatMul_660', 'MatMul_566', 'Unsqueeze_91']
+        config = PostTrainingQuantConfig(approach='static')
         q_model = quantization.fit(model, 
                                    config,
                                    eval_func=eval_func,
-                                   calib_dataloader=DefaultDataLoader(calib_dataset, model_args.batch_size)
-                                   )
+                                   calib_dataloader=DefaultDataLoader(calib_dataset, model_args.batch_size))
         q_model.save(model_args.save_path)
 
     if model_args.benchmark:
