@@ -21,7 +21,7 @@ Changes `+` or `+=` to `EltwiseAdd` from `from mpemu.module_wrappers import Eltw
 - Algorithm code: https://github.com/intel/neural-compressor/blob/fp8_adaptor/neural_coder/coders/tools/fp8.py#L102-L246
 - API interface code: https://github.com/intel/neural-compressor/blob/fp8_adaptor/neural_coder/interface.py#L283-L308
 
-# Use Guide
+## Use Guide (BKC)
 
 The features are called `fp8_matmul_swap` and `fp8_add_swap` in Neural Coder. So for example, if you want to swap `matmul`, then use `fp8_matmul_swap`.
 
