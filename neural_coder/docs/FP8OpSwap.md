@@ -3,6 +3,8 @@ FP8 OP Swap
 
 This document explains how to use Neural Coder to perform FP8 op swap.
 
+## Algorithm
+
 The FP8 op swap performs operation swap from the original op to FP8 op (i.e. `mpepu` FP8 emulator's op). It includes two categories: (1) matmul/bmm and (2) add. 
 
 The core algorithm code is in `neural_coder/coders/tools/fp8.py`, and the API interface code is in `neural_coder/interface.py` (which calls the core algorithm).
