@@ -51,7 +51,6 @@ function run_tuning {
     fi
 
     sed -i "/: bert/s|name:.*|name: $model_type|g" conf.yaml
-    sed -i "/approach:/s|approach:.*|approach: $approach|g" conf.yaml
 
     python -u ./run_qa.py \
         --model_name_or_path ${model_name_or_path} \
