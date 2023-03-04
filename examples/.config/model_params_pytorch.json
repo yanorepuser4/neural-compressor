@@ -588,7 +588,7 @@
     "marianmt_WMT_en_ro": {
       "model_src_dir": "nlp/huggingface_models/translation/quantization/ptq_dynamic/eager",
       "dataset_location": "",
-      "input_model": "",
+      "input_model": "/tf_dataset2/models/huggingface/opus-mt-en-ro",
       "yaml": "conf.yaml",
       "strategy": "basic",
       "batch_size": 64,
@@ -597,7 +597,7 @@
     "pegasus_samsum": {
       "model_src_dir": "nlp/huggingface_models/summarization/quantization/ptq_dynamic/eager",
       "dataset_location": "",
-      "input_model": "",
+      "input_model": "/tf_dataset2/models/huggingface/pegasus-samsum",
       "yaml": "conf.yaml",
       "strategy": "basic",
       "batch_size": 64,
