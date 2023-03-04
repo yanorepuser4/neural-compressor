@@ -42,6 +42,9 @@ function run_tuning {
 
     if [ "${topology}" = "pegasus_samsum" ]; then
         model_name_or_path='lvwerra/pegasus-samsum'
+        if [ "${input_model}" ]; then
+          model_name_or_path=${input_model}
+        fi
         model_type='pegasus'
         extra_cmd="--dataset_name samsum"
     fi
