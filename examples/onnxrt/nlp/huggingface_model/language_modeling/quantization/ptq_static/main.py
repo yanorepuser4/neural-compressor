@@ -252,14 +252,15 @@ def main():
         accuracy_criterion.higher_is_better = False
         accuracy_criterion.relative = 0.11
         fp32_op_names = None
-        # if args.model_name_or_path == 'Intel/gpt2-wikitext2':
-        #     fp32_op_names = ['FullyConnect_Add_.*', 'FullyConnect_MatMul_8', 'Attention_11_matmul', 
-        #                      'MatMul_2928', 'Attention_(7|11)', 'Attention_(0|3|4|8|9|10)_add']
-        # elif args.model_name_or_path == 'Intel/distilgpt2-wikitext2':
-        #     fp32_op_names = ['FullyConnect_MatMul_(2|5)', 'Attention_5_matmul',
-        #                      'MatMul_1488', 'Add_205', 'FullyConnect_Add_.*']
+        if args.model_name_or_path == 'Intel/gpt2-wikitext2':
+            fp32_op_names = ['FullyConnect_Add_.*', 'FullyConnect_MatMul_8', 'Attention_11_matmul', 
+                             'MatMul_2928', 'Attention_(7|11)', 'Attention_(0|3|4|8|9|10)_add']
+        elif args.model_name_or_path == 'Intel/distilgpt2-wikitext2':
+            fp32_op_names = ['FullyConnect_MatMul_(2|5)', 'Attention_5_matmul',
+                             'MatMul_1488', 'Add_205', 'FullyConnect_Add_.*']
         config = PostTrainingQuantConfig(approach='static', 
-                                         accuracy_criterion=accuracy_criterion)
+                                         accuracy_criterion=accuracy_criterion,
+                                         op_name_list={op_name:FP32 for op_name in fp32_op_names} if fp32_op_names else None)
         q_model = quantization.fit(model, 
                                    config,
                                    eval_func=eval_func,

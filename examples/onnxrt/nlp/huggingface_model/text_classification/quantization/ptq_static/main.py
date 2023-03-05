@@ -411,8 +411,17 @@ if __name__ == "__main__":
             optimization_options=opt_options)
         model = model_optimizer.model
 
-        from neural_compressor import quantization, PostTrainingQuantConfig
-        config = PostTrainingQuantConfig(approach='static')
+        from neural_compressor import quantization
+        from neural_compressor.config import PostTrainingQuantConfig, TuningCriterion
+        from neural_compressor.utils.constant import FP32
+        tuning_criterion = TuningCriterion(max_trials=500)
+        fp32_op_names = None
+        if args.model_name_or_path == 'Intel/bart-large-mrpc':
+            fp32_op_names = ['/model/(en|de)coder/layers.(3|4|5|6|8|1(0|1))/fc(1|2)/MatMul',
+                             '/model/(en|de)coder/layers.(6|7|1(0|1))/self_attn/.*MatMul']
+        config = PostTrainingQuantConfig(approach='static',
+                                         op_name_list={op_name:FP32 for op_name in fp32_op_names} if fp32_op_names else None,
+                                         tuning_criterion=tuning_criterion)
         q_model = quantization.fit(model, 
                                    config,
                                    eval_func=eval_func,

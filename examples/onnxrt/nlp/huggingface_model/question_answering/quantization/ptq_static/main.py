@@ -468,13 +468,20 @@ def main():
         model = model_optimizer.model
 
         from neural_compressor import quantization, PostTrainingQuantConfig
+        from neural_compressor.utils.constant import FP32
         calib_dataset = SQuADDataset(eval_dataset, model, label_names=["start_positions", "end_positions"])
         fp32_op_names = None
-        # if model_args.model_name_or_path == 'mrm8488/spanbert-finetuned-squadv1':
-        #     fp32_op_names = ['Gather_94', 'MatMul_660', 'MatMul_754', 'MatMul_848', 'MatMul_1036']
-        # elif model_args.model_name_or_path == 'salti/bert-base-multilingual-cased-finetuned-squad':
-        #     fp32_op_names = ['MatMul_660', 'MatMul_566', 'Unsqueeze_91']
-        config = PostTrainingQuantConfig(approach='static')
+        if model_args.model_name_or_path == 'mrm8488/spanbert-finetuned-squadv1':
+            fp32_op_names = ['Gather_94', 'MatMul_(660|754|848|1036)']
+        elif model_args.model_name_or_path == 'salti/bert-base-multilingual-cased-finetuned-squad':
+            fp32_op_names = ['MatMul_(660|566)', 'Unsqueeze_91']
+        elif model_args.model_name_or_path == 'deepset/roberta-large-squad2':
+            fp32_op_names = ['Attention_(0|1|2|3|4|5|8|9|14)', 'MatMul_(2290|2188|2086|2076|1984|1974|1960|1882|1678)',
+                             'Squeeze_.*?', 'Split_.*?', 'Add_.*?',  'Gather_.*?', ]
+        elif model_args.model_name_or_path == 'distilbert-base-uncased-distilled-squad':
+            fp32_op_names = ['MatMul_(448|272|184)', 'Squeeze_.*?', 'Split_.*?', 'Add_.*?','Gather_.*?']
+        config = PostTrainingQuantConfig(approach='static',
+                                         op_name_list={op_name:FP32 for op_name in fp32_op_names} if fp32_op_names else None)
         q_model = quantization.fit(model, 
                                    config,
                                    eval_func=eval_func,
