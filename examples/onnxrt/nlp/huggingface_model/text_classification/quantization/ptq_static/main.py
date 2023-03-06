@@ -414,11 +414,13 @@ if __name__ == "__main__":
         from neural_compressor import quantization
         from neural_compressor.config import PostTrainingQuantConfig, TuningCriterion
         from neural_compressor.utils.constant import FP32
-        tuning_criterion = TuningCriterion(max_trials=500)
+        tuning_criterion = TuningCriterion(max_trials=120)
         fp32_op_names = None
         if args.model_name_or_path == 'Intel/bart-large-mrpc':
             fp32_op_names = ['/model/(en|de)coder/layers.(3|4|5|6|8|1(0|1))/fc(1|2)/MatMul',
                              '/model/(en|de)coder/layers.(6|7|1(0|1))/self_attn/.*MatMul']
+        elif args.model_name_or_path == 'Intel/xlm-roberta-base-mrpc':
+            fp32_op_names = ['MatMul_(331|433|637|841|1045)', 'Attention_(2|4)', 'Add_129']
         config = PostTrainingQuantConfig(approach='static',
                                          op_name_list={op_name:FP32 for op_name in fp32_op_names} if fp32_op_names else None,
                                          tuning_criterion=tuning_criterion)
