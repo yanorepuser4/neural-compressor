@@ -414,16 +414,19 @@ if __name__ == "__main__":
         from neural_compressor import quantization
         from neural_compressor.config import PostTrainingQuantConfig, TuningCriterion
         from neural_compressor.utils.constant import FP32
-        tuning_criterion = TuningCriterion(max_trials=120)
         fp32_op_names = None
         if args.model_name_or_path == 'Intel/bart-large-mrpc':
             fp32_op_names = ['/model/(en|de)coder/layers.(3|4|5|6|8|1(0|1))/fc(1|2)/MatMul',
                              '/model/(en|de)coder/layers.(6|7|1(0|1))/self_attn/.*MatMul']
         elif args.model_name_or_path == 'Intel/xlm-roberta-base-mrpc':
             fp32_op_names = ['MatMul_(331|433|637|841|1045)', 'Attention_(2|4)', 'Add_129']
+        elif args.model_name_or_path == 'Alireza1044/albert-base-v2-sst2':
+            fp32_op_names = ['MatMul_(259|347|362|465|568|656|671|862|877|980|1054|1186|1274|1363|1377)', 
+                             'Attention_(0|1|2|3|4)', 'Add_(169|171|173|175|231)', 'Gather_(152|153|155)']
+        elif args.model_name_or_path == 'Intel/camembert-base-mrpc':
+            fp32_op_names = ['MatMul_(229|321|331|433|627|637|831|841|943|1147)']
         config = PostTrainingQuantConfig(approach='static',
-                                         op_name_list={op_name:FP32 for op_name in fp32_op_names} if fp32_op_names else None,
-                                         tuning_criterion=tuning_criterion)
+                                         op_name_list={op_name:FP32 for op_name in fp32_op_names} if fp32_op_names else None)
         q_model = quantization.fit(model, 
                                    config,
                                    eval_func=eval_func,
