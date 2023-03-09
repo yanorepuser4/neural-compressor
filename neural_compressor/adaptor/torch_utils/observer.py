@@ -17,7 +17,7 @@ def minmax_forward(self, x_orig):
     self.min_val.copy_(min_val)
     self.max_val.copy_(max_val)
     ################ my code start ##################
-    mean_val = torch.abs(torch.mean(torch.flatten(x)))
+    mean_val = torch.mean(torch.abs(torch.flatten(x)))
     if hasattr(self, 'mean_val'):
         self.mean_val = (self.mean_val + mean_val)/2
     else:
@@ -243,7 +243,7 @@ class FP8HistogramObserver(HistogramObserver):
             self.max_val.detach_().resize_(combined_max.shape)
             self.max_val.copy_(combined_max)
         ################ my code start ##################
-        mean_val = torch.abs(torch.mean(torch.flatten(x)))
+        mean_val = torch.mean(torch.abs(torch.flatten(x)))
         if hasattr(self, 'mean_val'):
             self.mean_val = (self.mean_val + mean_val)/2
         else:

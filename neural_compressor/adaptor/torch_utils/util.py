@@ -832,11 +832,13 @@ def get_fp8_scale(tensor, qtconfig):
         if torch.isinf(scale):
             scale = torch.tensor(3.4E38)
     if scale_method == "mean":
-        mean = abs(torch.mean(torch.flatten(tensor)))
-        mean = abs(mean) if abs(mean) > 1e-6 else qtconfig.get_flt_min()
-        if abs(mean) > 0.0:
-            scale_mean = qtconfig.get_flt_min() / abs(mean)
-        scale_mean = 1.0 if scale_mean < 1.0 else scale_mean
+        HF_min = qtconfig.get_flt_min()
+        mean = torch.mean(torch.abs(torch.flatten(tensor)))
+        mean = mean if mean > 1e-6 else HF_min
+        if 0.0 < mean < HF_min:
+            scale_mean = qtconfig.get_flt_min() / mean
+        else:
+            scale_mean = 1.0
         # make sure amax is included in new scale range.
         if scale_mean < scale:
             scale = scale_mean

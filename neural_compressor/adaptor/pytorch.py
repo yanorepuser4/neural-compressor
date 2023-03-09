@@ -3779,10 +3779,11 @@ class PyTorch_FP8Adaptor(TemplateAdaptor):
         def _get_combine_scale(amax, mean_val, HF_max, HF_min):
             scale = HF_max / amax
             if self.scale_method == 'mean':
-                mean_val = torch.abs(mean_val) if torch.abs(mean_val) > 1e-6 else HF_min
-                if abs(mean_val) > 0.0:
-                    scale_mean = HF_min / torch.abs(mean_val)
-                scale_mean = torch.tensor(1.0) if scale_mean < 1.0 else scale_mean
+                mean_val = mean_val if mean_val > 1e-6 else HF_min
+                if 0.0 < mean_val < HF_min:
+                    scale_mean = HF_min / mean_val
+                else:
+                    scale_mean = torch.tensor(1.0)
                 # make sure amax is included in new scale range.
                 if scale_mean < scale:
                     scale = scale_mean
@@ -3871,7 +3872,7 @@ class PyTorch_FP8Adaptor(TemplateAdaptor):
                 hook_handles.append(handle_pf)
         return hook_handles
 
-    def quantize_model_weights(self, model, model_qconfig_dict):
+    def quantize_model_weights(self, model, model_qconfig_dict, force_granularity=None):
         def _quantize_weight(module, wt_qconfig, granularity='per_channel'):
             from .torch_utils.util import quantize_tensor
             if granularity == 'per_channel':
@@ -3885,8 +3886,11 @@ class PyTorch_FP8Adaptor(TemplateAdaptor):
         for name, module in model.named_modules():
             if hasattr(module, 'weight') and name in model_qconfig_dict:
                 config = self.tune_cfg['op'][(name, str(module.__class__.__name__))]
-                granularity = config['weight']['granularity'] if \
-                  'granularity' in config['weight'] else 'per_tensor'
+                if force_granularity:
+                    granularity = force_granularity
+                else:
+                    granularity = config['weight']['granularity'] if \
+                      'granularity' in config['weight'] else 'per_tensor'
                 qconfig = model_qconfig_dict[name]
                 _quantize_weight(module, qconfig.wt_qconfig, granularity)
 
@@ -3909,7 +3913,9 @@ class PyTorch_FP8Adaptor(TemplateAdaptor):
                     fp32_model_dict[name] = copy.deepcopy(module.weight)
             # add fp8 emulation hook
             qutils.reset_quantization_setup(model, model_qconfig_dict)
-            self.quantize_model_weights(model, model_qconfig_dict) # inplace
+            # per_tensor for BN calibration
+            self.quantize_model_weights(model, model_qconfig_dict, 
+                                        force_granularity='per_tensor')
             hook_handles = self.add_quantization_hooks(model, model_qconfig_dict)
             model.train()
             if self.q_func:
