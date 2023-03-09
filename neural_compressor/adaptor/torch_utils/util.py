@@ -15,6 +15,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import copy
+import os
 import re
 import numpy as np
 from collections import UserDict
@@ -760,14 +761,7 @@ def quantize_tensor(tensor, qtconfig, scale=None, inplace=False):
     mode = qtconfig.dtype.upper()
 
     if not scale:
-        if mode == 'E5M2':
-            scale = 1.0
-        elif mode in ['E4M3', 'E3M4']:
-            HF_max = qtconfig.get_flt_max()
-            amax = torch.max(torch.abs(tensor))
-            scale = HF_max/ amax
-            if torch.isinf(scale):
-                scale = torch.tensor(3.4E38)
+        scale = get_fp8_scale(tensor, qtconfig)
 
     if qtconfig.scheme is not None:
         mode += "_"+qtconfig.scheme.upper()
@@ -823,3 +817,27 @@ def get_first_and_last(model):
                 # skip previous linear
                 last_linear = name
     return first_conv, last_linear
+
+def get_fp8_scale(tensor, qtconfig):
+    scale_method = os.getenv('SCALE_METHOD')
+    qtconfig.check_validity(qtconfig.dtype, qtconfig.scheme)
+    amax = torch.max(torch.abs(tensor))
+    mode = qtconfig.dtype.upper()
+    if mode == 'E5M2':
+        scale = 1.0
+    elif mode in ['E4M3', 'E3M4']:
+        HF_max = qtconfig.get_flt_max()
+        amax = torch.max(torch.abs(tensor))
+        scale = HF_max/ amax
+        if torch.isinf(scale):
+            scale = torch.tensor(3.4E38)
+    if scale_method == "mean":
+        mean = abs(torch.mean(torch.flatten(tensor)))
+        mean = abs(mean) if abs(mean) > 1e-6 else qtconfig.get_flt_min()
+        if abs(mean) > 0.0:
+            scale_mean = qtconfig.get_flt_min() / abs(mean)
+        scale_mean = 1.0 if scale_mean < 1.0 else scale_mean
+        # make sure amax is included in new scale range.
+        if scale_mean < scale:
+            scale = scale_mean
+    return scale

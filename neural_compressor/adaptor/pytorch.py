@@ -3649,6 +3649,7 @@ class PyTorch_FP8Adaptor(TemplateAdaptor):
         # Right now, mix precision is specific: E3M4 for weight and E4M3 for activation
         self.mix_precision = os.getenv('MIX_PRECISION')
         op_type_list = os.getenv('FP8_OP_TYPE_LIST')
+        self.scale_method = os.getenv('SCALE_METHOD')
         self.white_list = []
         if op_type_list:
             op_type_list = eval(op_type_list)
@@ -3730,7 +3731,7 @@ class PyTorch_FP8Adaptor(TemplateAdaptor):
             if dtype_w == 'fp32' and dtype_i == 'fp32':
                 continue
             # Experimental feature.
-            if self.mix_precision:
+            if self.mix_precision == "True":
                 dtype_w, dtype_i = 'fp8_e3m4', 'fp8_e4m3'
             # TODO： FP8_E5M2 Precision from strategy need to split for weight and activation
             # Here is a workaround for Embedding and EmbeddingBag.
@@ -3752,6 +3753,7 @@ class PyTorch_FP8Adaptor(TemplateAdaptor):
                 # The KL algorithm may encounter a overflow error on EltwiseAdd.
                 pass
         ### Insert input observer into model, only for fp8_e4m3 static quantization ###
+        from .torch_utils.observer import MinMaxObserver, FP8HistogramObserver
         for name, module in model.named_modules():
             op_type = str(module.__class__.__name__)
             if (name, op_type) in self.tune_cfg['op']:
@@ -3759,22 +3761,33 @@ class PyTorch_FP8Adaptor(TemplateAdaptor):
                 if config['activation']['dtype'] in ['fp8_e4m3', 'fp8_e3m4']:
                     algorithm = config['activation']['algorithm']
                     qtconfig = model_qconfig_dict[name].iact_qconfig
-                    from .torch_utils.observer import FP8HistogramObserver
                     from mpemu.module_wrappers import (BatchMatmul, Matmul, AddMatmul,
                                                         EltwiseAdd, EltwiseMul, EltwiseDiv)
                     module.add_module(
                         'input_activation_post_process', FP8HistogramObserver(qtconfig=qtconfig) if \
-                                    algorithm == 'kl' else torch.quantization.MinMaxObserver()
+                                    algorithm == 'kl' else MinMaxObserver()
                     )
                     if type(module) in [BatchMatmul, Matmul, AddMatmul,
                                         EltwiseAdd, EltwiseMul, EltwiseDiv]:
                         module.add_module(
                             'input_activation_post_process1', FP8HistogramObserver(qtconfig=qtconfig) if \
-                                    algorithm == 'kl' else torch.quantization.MinMaxObserver()
+                                    algorithm == 'kl' else MinMaxObserver()
                         )
                     module.register_forward_pre_hook(input_observer_forward_pre_hook)
 
     def _calibration_for_scale(self, model, dataloader, model_qconfig_dict):
+        def _get_combine_scale(amax, mean_val, HF_max, HF_min):
+            scale = HF_max / amax
+            if self.scale_method == 'mean':
+                mean_val = torch.abs(mean_val) if torch.abs(mean_val) > 1e-6 else HF_min
+                if abs(mean_val) > 0.0:
+                    scale_mean = HF_min / torch.abs(mean_val)
+                scale_mean = torch.tensor(1.0) if scale_mean < 1.0 else scale_mean
+                # make sure amax is included in new scale range.
+                if scale_mean < scale:
+                    scale = scale_mean
+            return scale
+
         if self.q_func:
             self.q_func(model)
         else:
@@ -3787,24 +3800,35 @@ class PyTorch_FP8Adaptor(TemplateAdaptor):
         for name, module in model.named_modules():
             if hasattr(module, 'input_activation_post_process'):
                 HF_max = model_qconfig_dict[name].iact_qconfig.get_flt_max()
+                HF_min = model_qconfig_dict[name].iact_qconfig.get_flt_min()
+            if hasattr(module, 'input_activation_post_process'):
                 if hasattr(module.input_activation_post_process, '_non_linear_param_search'):
                     min_val, max_val = module.input_activation_post_process._non_linear_param_search()
                 else:
                     min_val = module.input_activation_post_process.min_val
                     max_val = module.input_activation_post_process.max_val
                 amax = torch.max(torch.abs(max_val), torch.abs(min_val))
-                scale = HF_max / amax
+                if hasattr(module.input_activation_post_process, "mean_val") \
+                  and self.scale_method == 'mean':
+                    mean_val = module.input_activation_post_process.mean_val
+                    scale = _get_combine_scale(amax, mean_val, HF_max, HF_min)
+                else:
+                    scale = HF_max / amax
                 module.register_parameter('scale', torch.nn.Parameter(scale))
                 delattr(module, 'input_activation_post_process')
             if hasattr(module, 'input_activation_post_process1'):
-                HF_max = model_qconfig_dict[name].iact_qconfig.get_flt_max()
                 if hasattr(module.input_activation_post_process1, '_non_linear_param_search'):
                     min_val, max_val = module.input_activation_post_process1._non_linear_param_search()
                 else:
                     min_val = module.input_activation_post_process1.min_val
                     max_val = module.input_activation_post_process1.max_val
                 amax = torch.max(torch.abs(max_val), torch.abs(min_val))
-                scale = HF_max / amax
+                if hasattr(module.input_activation_post_process1, "mean_val") \
+                  and self.scale_method == 'mean':
+                    mean_val = module.input_activation_post_process1.mean_val
+                    scale = _get_combine_scale(amax, mean_val, HF_max, HF_min)
+                else:
+                    scale = HF_max / amax
                 module.register_parameter('scale1', torch.nn.Parameter(scale))
                 delattr(module, 'input_activation_post_process1')
     

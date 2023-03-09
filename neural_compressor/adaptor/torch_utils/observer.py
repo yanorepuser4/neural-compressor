@@ -4,6 +4,28 @@ from typing import Tuple
 import torch
 from torch.ao.quantization.observer import *
 
+# used to fetch mean val of tensor.
+def minmax_forward(self, x_orig):
+    r"""Records the running minimum and maximum of ``x``."""
+    if x_orig.numel() == 0:
+        return x_orig
+    x = x_orig.detach()  # avoid keeping autograd tape
+    x = x.to(self.min_val.dtype)
+    min_val_cur, max_val_cur = torch.aminmax(x)
+    min_val = torch.min(min_val_cur, self.min_val)
+    max_val = torch.max(max_val_cur, self.max_val)
+    self.min_val.copy_(min_val)
+    self.max_val.copy_(max_val)
+    ################ my code start ##################
+    mean_val = torch.abs(torch.mean(torch.flatten(x)))
+    if hasattr(self, 'mean_val'):
+        self.mean_val = (self.mean_val + mean_val)/2
+    else:
+        self.register_buffer('mean_val', mean_val)
+    ################ my code done ##################
+    return x_orig
+
+MinMaxObserver.forward = minmax_forward
 
 class FP8HistogramObserver(HistogramObserver):
     def __init__(
@@ -220,6 +242,13 @@ class FP8HistogramObserver(HistogramObserver):
             self.min_val.copy_(combined_min)
             self.max_val.detach_().resize_(combined_max.shape)
             self.max_val.copy_(combined_max)
+        ################ my code start ##################
+        mean_val = torch.abs(torch.mean(torch.flatten(x)))
+        if hasattr(self, 'mean_val'):
+            self.mean_val = (self.mean_val + mean_val)/2
+        else:
+            self.register_buffer('mean_val', mean_val)
+        ################ my code done ##################
         return x_orig
 
 
