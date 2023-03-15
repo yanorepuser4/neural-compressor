@@ -644,3 +644,70 @@ class ONNXModel(BaseModel):
             current_node = matched_parent
 
         return matched_parents
+    
+    def find_qkv_in_attention(self, find_all=False):
+        qkv = []
+        for node in self._model.graph.node:
+            start_node, qkv_nodes_list = None, None
+            if node.op_type == 'SkipLayerNormalization':
+            # if node.name == 'MatMul':
+                start_node = node
+                qkv_nodes_list = [
+                    self.match_parent_path(
+                        start_node,
+                        ["MatMul", "Reshape", "Transpose", "Reshape", "MatMul"],
+                        [None, 0, 0, 0, 0],)
+                ]
+                # print(node.name, node.op_type, None if not any(qkv_nodes_list) else [n.name for n in qkv_nodes_list])
+            if node.op_type == 'Add':
+                start_node = node
+                qkv_nodes_list = [
+                    # match base attention structure
+                    self.match_parent_path(
+                        start_node,
+                        ["Add", "MatMul", "Reshape", "Transpose", "MatMul"],
+                        [0, None, 0, 0, 0],),
+                    self.match_parent_path(
+                        start_node,
+                        ["Add", "MatMul", "Reshape", "Transpose", "MatMul"],
+                        [1, None, 0, 0, 0]),
+
+                    # match gpt attention no past structure
+                    self.match_parent_path(
+                        start_node,
+                        ["Reshape", "Gemm", "Reshape", "Reshape", "Transpose", "MatMul"],
+                        [ None, 0, 0, 0, 0, 0],
+                        output_name_to_node=self.output_name_to_node,
+                        return_indice=[]),
+                    
+                    # match bart attention structure
+                    self.match_parent_path(
+                        start_node,
+                        ["Add", "MatMul", "Reshape", "Transpose", "Reshape", "MatMul"],
+                        [1, None, 0, 0, 0, 0]),
+                    ]
+
+            if not start_node:
+                continue
+            if not any(qkv_nodes_list):
+                continue
+            qkv_nodes = [qkv for qkv in qkv_nodes_list if qkv is not None][-1]
+            other_inputs = []
+            for input in start_node.input:
+                if input not in self.output_name_to_node:
+                    continue
+                if input == qkv_nodes[0].output[0]:
+                    continue
+                other_inputs.append(input)
+            if len(other_inputs) != 1:
+                continue
+            root_input = other_inputs[0]
+            input_name_to_nodes = self.input_name_to_nodes
+            children = input_name_to_nodes[root_input]
+            children_types = [child.op_type for child in children]
+            if children_types.count("MatMul") == 3:
+                qkv.append([child.name for child in children if child.op_type == "MatMul"])
+                if not find_all:
+                    break
+        return qkv
+        

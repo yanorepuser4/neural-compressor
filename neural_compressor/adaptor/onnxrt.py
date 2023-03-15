@@ -647,50 +647,13 @@ class ONNXRUNTIMEAdaptor(Adaptor):
             is_nlp = True
 
         # 3. according to attention structure
-        for node in model.model.graph.node:
-            if node.op_type == 'Add':
-                start_node = node
-                qkv_nodes_list = [
-                    # match base attention structure
-                    model.match_parent_path(
-                        start_node,
-                        ["Add", "MatMul", "Reshape", "Transpose", "MatMul"],
-                        [0, None, 0, 0, 0],),
-                    model.match_parent_path(
-                        start_node,
-                        ["Add", "MatMul", "Reshape", "Transpose", "MatMul"],
-                        [1, None, 0, 0, 0]),
-
-                    # match gpt attention no past structure
-                    model.match_parent_path(
-                        start_node,
-                        ["Reshape", "Gemm", "Reshape", "Reshape", "Transpose", "MatMul"],
-                        [ None, 0, 0, 0, 0, 0],
-                        output_name_to_node=model.output_name_to_node,
-                        return_indice=[])
-                    ]
-                if not any(qkv_nodes_list):
-                    continue
-                qkv_nodes = [qkv for qkv in qkv_nodes_list if qkv is not None][-1]
-                other_inputs = []
-                for input in start_node.input:
-                    if input not in model.output_name_to_node:
-                        continue
-                    if input == qkv_nodes[0].output[0]:
-                        continue
-                    other_inputs.append(input)
-                if len(other_inputs) != 1:
-                    continue
-                root_input = other_inputs[0]
-                input_name_to_nodes = model.input_name_to_nodes
-                children = input_name_to_nodes[root_input]
-                children_types = [child.op_type for child in children]
-                if children_types.count("MatMul") == 3:
-                    is_nlp = True
-                    break
+        qkv = model.find_qkv_in_attention()
+        if len(qkv) != 0:
+            is_nlp = True
 
         # 4. according to LSTM structure
-        if "LSTM" in [node.op_type for node in model.model.graph.node]:
+        optypes = [node.op_type for node in model.model.graph.node]
+        if "LSTM" in optypes or "Attention" in optypes:
             is_nlp = True
 
         logger.warning("The model is automatically detected as {} model. "
@@ -1017,8 +980,22 @@ class ONNXRUNTIMEAdaptor(Adaptor):
                                                              first_quantizable_node[0].op_type)]
         recipes_ops['last_conv_or_matmul_quantization'] = [(last_quantizable_node[0].name, 
                                                             last_quantizable_node[0].op_type)]
-
+        
+        
+        # qkvs = self.pre_optimized_model.find_qkv_in_attention(find_all=True)
+        # print(qkvs)
         attention_matmul_optype = [node.op_type for node in attention_matmul]
+        # attention_matmul_name = [node.name for node in attention_matmul]
+        # import pdb
+        # pdb.set_trace()
+        # if 'Attention' not in attention_matmul_optype and len(qkvs) > 0:
+        #     for idx in range(len(qkvs)):
+        #         layer_matmul = attention_matmul[attention_matmul_name.index(qkvs[idx][0]):\
+        #                                         attention_matmul_name.index(qkvs[idx+1][0])] \
+        #             if idx != len(qkvs) - 1 \
+        #                 else [attention_matmul[attention_matmul_name.index(qkvs[idx][0]):]]
+        #         print(idx, [n.name for n in layer_matmul])
+        #         ffn_matmul.extend([layer_matmul[-2], layer_matmul[-1]])
         if len(attention_matmul) > 0 and 'Attention' in attention_matmul_optype:
             first_attention_index = attention_matmul_optype.index('Attention')
             attention_matmul_optype = attention_matmul_optype[first_attention_index:]
