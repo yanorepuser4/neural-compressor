@@ -412,7 +412,12 @@ if __name__ == "__main__":
         model = model_optimizer.model
 
         from neural_compressor import quantization, PostTrainingQuantConfig
+        from neural_compressor.utils.constant import FP32
+        fp32_op_names = None
+        if args.model_name_or_path == 'Intel/bart-large-mrpc':
+            fp32_op_names = ['/model/(en|de)coder/layers.*/fc(1|2)/MatMul']
         config = PostTrainingQuantConfig(approach='static',
+                                         op_name_dict={op_name:FP32 for op_name in fp32_op_names} if fp32_op_names else None,
                                          recipes={"ffn_matmul_quantization": False}
                                          )
         q_model = quantization.fit(model, 
