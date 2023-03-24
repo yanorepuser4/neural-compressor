@@ -300,16 +300,16 @@
           'EltwiseAdd': *cap_fp8_e5m2_1_11_Matmul, 
           'EltwiseMul': *cap_fp8_e5m2_1_11_Matmul, 
           'EltwiseDiv': *cap_fp8_e5m2_1_11_Matmul,
-          'Embedding': &cap_fp8_e5m2_1_11_Embedding {
-            'weight': {
-                        'dtype': ['fp8_e5m2'],
-                        },
-            'activation': {
-                        'dtype': ['fp32'],
-                        },
-                    },
-          'EmbeddingBag': *cap_fp8_e5m2_1_11_Embedding,
-          'LayerNorm': *cap_fp8_e5m2_1_11_Conv2d,
+          #'Embedding': &cap_fp8_e5m2_1_11_Embedding {
+          #  'weight': {
+          #              'dtype': ['fp8_e5m2'],
+          #              },
+          #  'activation': {
+          #              'dtype': ['fp32'],
+          #              },
+          #          },
+          #'EmbeddingBag': *cap_fp8_e5m2_1_11_Embedding,
+          #'LayerNorm': *cap_fp8_e5m2_1_11_Conv2d,
           'default': {
             'activation': {
                         'dtype': ['fp32'],

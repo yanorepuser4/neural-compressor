@@ -13,6 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+version: 1.0
+
 model:                                               # mandatory. used to specify model specific information.
   name: bert 
   framework: onnxrt_qlinearops                       # mandatory. possible values are tensorflow, mxnet, pytorch, pytorch_ipex, onnxrt_integerops and onnxrt_qlinearops.
@@ -25,19 +27,19 @@ quantization:
       batch_size: 8
       dataset:
         GLUE:
-          data_dir: /path/to/dataset
+          data_dir: "/home/mengniwa/data/MRPC/"
           model_name_or_path: bert-base-uncased
           max_seq_length: 128
           task: mrpc
           model_type: bert
           dynamic_length: False
 
-  op_wise: {
-    'MatMul_851': {
-        'activation':  {'dtype': ['fp32']},
-        'weight': {'dtype': ['fp32']}
-      }
-  }
+  #op_wise: {
+  #  'MatMul_851': {
+  #      'activation':  {'dtype': ['fp32']},
+  #      'weight': {'dtype': ['fp32']}
+  #    }
+  #}
 
 evaluation:                                          # optional. required if user doesn't provide eval_func in neural_compressor.Quantization.
   accuracy:
@@ -48,7 +50,7 @@ evaluation:                                          # optional. required if use
       batch_size: 8
       dataset:
         GLUE:
-          data_dir: /path/to/dataset
+          data_dir: "/home/mengniwa/data/MRPC/"
           model_name_or_path: bert-base-uncased
           max_seq_length: 128
           task: mrpc
@@ -73,7 +75,7 @@ evaluation:                                          # optional. required if use
 
 tuning:
   accuracy_criterion:
-    relative:  0.01                                  # optional. default value is relative, other value is absolute. this example allows relative accuracy loss: 1%.
+    relative:  0.9                                  # optional. default value is relative, other value is absolute. this example allows relative accuracy loss: 1%.
   exit_policy:
     timeout: 0                                       # optional. tuning timeout (seconds). default value is 0 which means early stop. combine with max_trials field to decide when to exit.
   random_seed: 9527                                  # optional. random seed for deterministic tuning.

@@ -269,6 +269,87 @@ class ONNXRTAugment:
 
         return list(output_dicts.keys()), output_dicts
 
+    def update_BN(self):
+        self.augment_graph()
+        import torch
+        # conduct inference session and get intermediate outputs
+        so = onnxruntime.SessionOptions()
+        if sys.version_info < (3,10) and find_spec('onnxruntime_extensions'): # pragma: no cover
+            from onnxruntime_extensions import get_library_path
+            so.register_custom_ops_library(get_library_path())
+
+        session = onnxruntime.InferenceSession(
+                    self.augmented_model.SerializeToString(),
+                    so,
+                    provider=self.backend) if not self.model_wrapper.large_size else \
+                  onnxruntime.InferenceSession(
+                    self.model_wrapper.model_path  + '_augment.onnx',
+                    so,
+                    provider=self.backend)
+
+        intermediate_outputs = []
+        len_inputs = len(session.get_inputs())
+        inputs_names = [session.get_inputs()[i].name for i in range(len_inputs)]
+        output_dicts = {}
+        
+        node_output_names = [output.name if output.name not in self.dequantized_output \
+                             else self.dequantized_output[output.name] \
+                             for output in session.get_outputs()]
+
+        update_data = {}
+        wrapper = ONNXModel(self.augmented_model)
+        for node in wrapper.nodes():
+            if node.op_type == 'BatchNormalization':
+                momentum = [i.f for i in node.attribute if i.name == 'momentum'][0]
+                update_data[node.input[0]] = [torch.from_numpy(copy.deepcopy(numpy_helper.to_array(wrapper.get_initializer(node.input[3])))),
+                    torch.from_numpy(copy.deepcopy(numpy_helper.to_array(wrapper.get_initializer(node.input[4])))), momentum]
+
+        for idx, (inputs, labels) in enumerate(self.dataloader):
+            ort_inputs = {}
+            if len_inputs == 1:
+                ort_inputs.update(
+                    inputs if isinstance(inputs, dict) else {inputs_names[0]: inputs}
+                )
+            else:
+                assert len_inputs == len(inputs), \
+                    'number of input tensors must align with graph inputs'
+                if isinstance(inputs, dict):  # pragma: no cover
+                    ort_inputs.update(inputs)
+                else:
+                    for i in range(len_inputs):
+                        if not isinstance(inputs[i], np.ndarray): # pragma: no cover
+                            ort_inputs.update({inputs_names[i]: np.array(inputs[i])})
+                        else:
+                            ort_inputs.update({inputs_names[i]: inputs[i]})
+            if self.iterations != []:
+                if idx > max(self.iterations):
+                    break
+                if idx in self.iterations:
+                    for output_idx, output in enumerate(session.run(None, ort_inputs)): 
+                        if node_output_names[output_idx] in update_data:
+                            mean = update_data[node_output_names[output_idx]][0]
+                            var = update_data[node_output_names[output_idx]][1]
+                            momentum = update_data[node_output_names[output_idx]][2]
+
+                            update_data[node_output_names[output_idx]][0] = \
+                                (1 - momentum) * torch.from_numpy(output).mean(dim=(0,2,3)) + momentum * mean
+                            update_data[node_output_names[output_idx]][1] = \
+                                (1 - momentum) * torch.from_numpy(output).var(dim=(0,2,3)) + momentum * var
+ 
+            else:
+                for output_idx, output in enumerate(session.run(None, ort_inputs)): 
+                    if node_output_names[output_idx] in update_data:
+                        mean = update_data[node_output_names[output_idx]][0]
+                        var = update_data[node_output_names[output_idx]][1]
+                        momentum = update_data[node_output_names[output_idx]][2]
+
+                        update_data[node_output_names[output_idx]][0] = \
+                            (1 - momentum) * torch.from_numpy(output).mean(dim=(0,2,3)) + momentum * mean
+                        update_data[node_output_names[output_idx]][1] = \
+                            (1 - momentum) * torch.from_numpy(output).var(dim=(0,2,3)) + momentum * var
+ 
+        return update_data
+
     def _dequantize(self, tensor, scale_tensor, zo_tensor):
         ''' helper function to dequantize tensor
         '''

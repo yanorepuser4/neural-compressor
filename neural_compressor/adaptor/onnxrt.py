@@ -36,6 +36,34 @@ from neural_compressor.conf.dotdict import deep_get
 from neural_compressor.utils.utility import CpuInfo
 import math
 import sys
+from mpemu.pytquant.cpp import fpemu_cpp
+from onnxruntime_extensions import onnx_op, PyCustomOpDef, make_onnx_model
+from onnx import helper, numpy_helper, onnx_pb as onnx_proto
+#if self.precision == 'fp8_e5m2':
+#    scale = 1.0
+#    dtype = 'E5M2'
+#else:
+#    scale = None
+#    dtype = self.precision.split('_')[-1].upper()
+
+#@onnx_op(op_type="FP8_converter_2",
+#         inputs=[PyCustomOpDef.dt_float, PyCustomOpDef.dt_float])
+#def FP8_converter_2(x, y):
+#    input = torch.from_numpy(x)
+#    size = input.nelement()
+#    outputs = fpemu_cpp.fpemu_cpp.forward(input.contiguous(), 'E5M2_RNE', size, False, y)
+#    output = outputs[0]
+#    return output.cpu().detach().numpy()
+
+#@onnx_op(op_type="FP8_converter_1",
+#         inputs=[PyCustomOpDef.dt_float])
+#def FP8_converter_1(x):
+#    input = torch.from_numpy(x)
+#    size = input.nelement()
+#    outputs = fpemu_cpp.fpemu_cpp.forward(input.contiguous(), 'E5M2_RNE', size, False, 1.0, False, 1)
+#    output = outputs[0]
+#    return output.cpu().detach().numpy()
+
 
 onnx = LazyImport("onnx")
 ort = LazyImport("onnxruntime")
@@ -63,7 +91,7 @@ class ONNXRUNTIMEAdaptor(Adaptor):
         self.static = framework_specific_info["approach"] == "post_training_static_quant"
         self.dynamic = framework_specific_info["approach"] == "post_training_dynamic_quant"
         self.backend = PROVIDERS[framework_specific_info["backend"]]
-        self.precision = framework_specific_info['precision']
+        self.precision = framework_specific_info.get('precision', 'fp8_e5m2')
 
         if self.backend not in ort.get_all_providers():
             logger.warning("{} backend is not supported in current environment, "
@@ -367,6 +395,20 @@ class ONNXRUNTIMEAdaptor(Adaptor):
                    header='Mixed Precision Statistics',
                    field_names=field_names).print_stat()
         self.optype_statistics = field_names, output_data
+
+    def _get_bn_update(self, model, data_loader, quantize_config, iterations):
+        from neural_compressor.adaptor.ox_utils.calibration import ONNXRTAugment
+        from neural_compressor.model.onnx_model import ONNXModel
+        if not isinstance(model, ONNXModel):
+            model = ONNXModel(model)
+        augment = ONNXRTAugment(model, \
+                  data_loader, ['BatchNormalization'], \
+                  iterations=list(range(0, quantize_config['calib_iteration'])),
+                  backend=self.backend, reduce_range=self.reduce_range)
+        update_data = augment.update_BN()
+        for name, val in update_data.items():
+            if self.pre_optimized_model.get_initializer(name):
+                self.pre_optimized_model.set_initializer(self.pre_optimized_model.get_initializer(name), val[0].cpu().detach().numpy())
 
     def _get_quantize_params(self, model, data_loader, quantize_config, iterations):
         from neural_compressor.adaptor.ox_utils.calibration import ONNXRTAugment
@@ -1134,45 +1176,34 @@ class ONNXRT_FP8Adaptor(ONNXRUNTIMEAdaptor):
         return {'optypewise': optype_wise, 'opwise': op_wise}
 
     def _fp8_quantize(self, model, op_config, params=None):
-        from mpemu.pytquant.cpp import fpemu_cpp
-        from onnxruntime_extensions import (
-            onnx_op, PyCustomOpDef, make_onnx_model,
-            get_library_path as _get_library_path)
-        from onnx import helper, numpy_helper, onnx_pb as onnx_proto
-        #if self.precision == 'fp8_e5m2':
-        #    scale = 1.0
-        #    dtype = 'E5M2'
-        #else:
-        #    scale = None
-        #    dtype = self.precision.split('_')[-1].upper()
-
-        #@onnx_op(op_type="FP8_converter_2",
-        #         inputs=[PyCustomOpDef.dt_float, PyCustomOpDef.dt_float])
-        #def FP8_converter_2(x, y):
-        #    input = torch.from_numpy(x)
-        #    size = input.nelement()
-        #    outputs = fpemu_cpp.fpemu_cpp.forward(input.contiguous(), 'E5M2_RNE', size, False, y)
-        #    output = outputs[0]
-        #    return output.cpu().detach().numpy()
-
-        @onnx_op(op_type="FP8_converter_1",
-                 inputs=[PyCustomOpDef.dt_float])
-        def FP8_converter_1(x):
-            input = torch.from_numpy(x)
-            size = input.nelement()
-            outputs = fpemu_cpp.fpemu_cpp.forward(input.contiguous(), 'E5M2_RNE', size, False, 1.0, False, 1)
-            output = outputs[0]
-            return output.cpu().detach().numpy()
-
         add_nodes = []
         add_inits = []
+        fp8_nodes = []
+        input_name_to_nodes = {}
+        output_name_to_node = {}
         for node in model.graph.node:
-            if node.name in op_config:
+            for inp in node.input:
+                if find_by_name(inp, model.graph.initializer) is None:
+                    if inp not in input_name_to_nodes:
+                        input_name_to_nodes[inp] = [node.name]
+                    else:
+                        input_name_to_nodes[inp].append(node.name)
+            for output in node.output:
+                output_name_to_node[output] = node.name
+                    
+        for node in model.graph.node:
+            if node.name in op_config and any([i not in input_name_to_nodes for i in node.input]):
+                if node.op_type == 'Add':
+                    activation = [i for i in node.input if find_by_name(i, model.graph.initializer) is None][0]
+                    if output_name_to_node[activation] not in fp8_nodes:
+                        add_nodes.append(node)
+                        continue
+
                 for idx, inp in enumerate(node.input):
                     init = find_by_name(inp, model.graph.initializer)
                     if init is not None:
                         array = numpy_helper.to_array(init)
-                        input = torch.from_numpy(array)
+                        input = torch.from_numpy(copy.deepcopy(array))
                         size = input.nelement()
                         outputs = fpemu_cpp.fpemu_cpp.forward(input.contiguous(), 'E5M2_RNE', size, False, 1.0, False, 1)
                         output = outputs[0]
@@ -1184,6 +1215,7 @@ class ONNXRT_FP8Adaptor(ONNXRUNTIMEAdaptor):
                                               name='FP8_converter_1_'+str(len(add_nodes)), domain='ai.onnx.contrib')
                         node.input[idx] = 'fp8_output_'+str(len(add_nodes))
                         add_nodes.append(new)
+                    fp8_nodes.append(node.name)
                     #else:
                     #    new = helper.make_node('FP8_converter_2', [inp], ['output_'+str(len(add_nodes))],
                     #                          domain='ai.onnx.contrib')
@@ -1191,7 +1223,7 @@ class ONNXRT_FP8Adaptor(ONNXRUNTIMEAdaptor):
                     #    add_nodes.append(new)
             add_nodes.append(node)
         graph = helper.make_graph(add_nodes, 'fp8_model', model.graph.input, model.graph.output, model.graph.initializer)
-        new_model = make_onnx_model(graph)
+        new_model = make_onnx_model(graph, opset_version=model.opset_import[0].version)
 
         return new_model
 
@@ -1211,6 +1243,13 @@ class ONNXRT_FP8Adaptor(ONNXRUNTIMEAdaptor):
             (dict): quantized model
         """
         assert q_func is None, "quantization aware training has not been supported on ONNXRUNTIME"
+
+        iterations = tune_cfg.get('calib_iteration', 1)
+
+        self.quantizable_ops = self._query_quantizable_ops(model.model)
+        quantize_config = self._cfg_to_quantize_config(tune_cfg)
+        #fp8_model = self._fp8_quantize(copy.deepcopy(model.model), quantize_config, None)
+        #self._get_bn_update(fp8_model, data_loader, quantize_config, iterations)
         model = self.pre_optimized_model if self.pre_optimized_model else model
         ort_version = Version(ort.__version__)
         if ort_version < ONNXRT152_VERSION: # pragma: no cover
@@ -1224,13 +1263,9 @@ class ONNXRT_FP8Adaptor(ONNXRUNTIMEAdaptor):
         #    self._calibration_for_scale(q_model._model, dataloader, model_qconfig_dict)
         #else:
         #    format = QuantizationMode.IntegerOps
-
-        self.quantizable_ops = self._query_quantizable_ops(model.model)
         tmp_model = copy.deepcopy(model)
 
-        quantize_config = self._cfg_to_quantize_config(tune_cfg)
         
-        iterations = tune_cfg.get('calib_iteration', 1)
         calib_sampling_size = tune_cfg.get('calib_sampling_size', 1)
         if self.precision != 'fp8_e5m2':
             if isinstance(data_loader, BaseDataLoader):
@@ -1356,6 +1391,7 @@ class ONNXRT_FP8Adaptor(ONNXRUNTIMEAdaptor):
             sess_options.intra_op_num_threads = cores_per_instance
 
         from onnxruntime_extensions import get_library_path
+        sess_options.intra_op_num_threads = 24
         sess_options.register_custom_ops_library(get_library_path())
         session = ort.InferenceSession(self.work_space + 'eval.onnx',
                                        sess_options,
