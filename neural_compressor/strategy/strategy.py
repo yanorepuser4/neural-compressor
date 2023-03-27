@@ -549,9 +549,9 @@ class TuneStrategy(object):
         if recipe_cfgs and recipe_cfgs.get('smooth_quant', False):
             # skip assign alpha to sq first.
             # set the alpha to 0.5 by default
-            # smooth_quant_args = recipe_cfgs.get('smooth_quant_args', {'alpha': 0.5})
+            smooth_quant_args = recipe_cfgs.get('smooth_quant_args', {'alpha': 0.5})
             sq_algo = ALGORITHMS()['smooth_quant']
-            #sq_algo.alpha = smooth_quant_args['alpha']
+            sq_algo.alpha = smooth_quant_args['alpha']
             #logger.debug(f"Set smooth quant with alpha {smooth_quant_args['alpha']} as the pre-quantization algo.")
             algo_scheduler.append_algorithm('pre_quantization', sq_algo)
             
@@ -706,6 +706,7 @@ class TuneStrategy(object):
             
         if not self.cfg.tuning.exit_policy.performance_only:
             # get fp32 model baseline
+            self.baseline=[0.6, [0,0]]
             if self.baseline is None:
                 logger.info("Get FP32 model baseline.")
                 self._fp32_model = self.model
