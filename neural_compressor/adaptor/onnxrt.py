@@ -176,6 +176,9 @@ class ONNXRUNTIMEAdaptor(Adaptor):
         from onnx import numpy_helper
         black_nodes = []
         white_nodes = []
+        if isinstance(alpha, str):
+            logger.warning("smooth quant of onnx backend does not support alpha auto tuning, use alpha=0.5 as default value")
+            alpha = 0.5
         if tune_cfg is not None:
             quantize_config = self._cfg_to_quantize_config(tune_cfg)
             black_nodes = [node for node in quantize_config if quantize_config[node] == 'fp32']
