@@ -43,7 +43,7 @@ python benchmark.py \
 # Validated Models
 | Model\Accuracy       |  FP32  |    INT8 (w/o SmoothQuant)     | INT8 (w/ SmoothQuant)           |
 |------------------|:------:|:-----------:|--------------|
-| bigscience/bloom-560m | 65.16% | 64.96%  | 66.52% (alpha=0.5)   |
+| bigscience/bloom-560m | 65.20% | 64.96%  | 66.52% (alpha=0.5)   |
 | bigscience/bloom-1b7 | 71.55% |   67.61%    | 72.81% (alpha=0.5)       |
 | bigscience/bloom-3b | 74.06% |   70.73%    | 74.41% (alpha=0.5)       |
 | bigscience/bloom-7b1 | 77.59% |   76.28%    | 77.18% (alpha=0.5)       |
