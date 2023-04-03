@@ -34,7 +34,7 @@ class Eval_Func(object):
                 '    "eval_rouge",', 
                 '    "eval_sacrebleu",', 
                 '    "eval_spearmanr",', 
-                '    "eval_mcc",', 
+                '    "eval_mxxxxxxxxxxxxxxxxxcc",', 
                 '    "eval_acc",', 
                 '    "eval_acc_and_f1",', 
                 '    "eval_corr",', 
