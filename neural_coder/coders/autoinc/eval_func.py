@@ -38,7 +38,7 @@ class Eval_Func(object):
                 '    "eval_acc",', 
                 '    "eval_acc_and_f1",', 
                 '    "eval_corr",', 
-                '    "eval_mnlxxxxxxxxxxxxxxxxxxxxxxi/acc",',
+                '    "eval_mnli/acc",',
                 '    "eval_mnli-mm/acc",', 
                 '    "eval_exact_match",', 
                 '    "eval_f1",', 
@@ -50,7 +50,7 @@ class Eval_Func(object):
                 ]
             for index, line in enumerate(lines):
                 if index != 0:
-                    lines[index] = '[+] ' + line
+                    lines[index] = '[+] ' + ' ' * 4 + line
             lines = '\n'.join(lines)
             globals.list_eval_func_lines.append(lines)
         elif globals.code_domain == 'transformers_no_trainer':

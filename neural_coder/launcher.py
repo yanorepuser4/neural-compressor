@@ -42,7 +42,7 @@ class Launcher():
         args,
         use_modular=False,
         modular_pattern={},
-        use_inc=True,
+        use_inc=False,
     ):
         # copy user entry script (main.py -> main_optimized.py)
         script_copied = args.script[:-3] + "_optimized.py"
