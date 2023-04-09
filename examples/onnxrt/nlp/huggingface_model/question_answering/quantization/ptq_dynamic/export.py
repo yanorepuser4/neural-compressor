@@ -63,7 +63,7 @@ if __name__ == "__main__":
         default=512,
         help='Maximum length of the sentence pairs')
     args = parser.parse_args()
-    args.output_model = args.model_name_or_path.split('/')[1] + '.onnx'
+    args.output_model = args.model_name_or_path.split('/')[-1] + '.onnx'
 
     model = AutoModelForQuestionAnswering.from_pretrained(
         args.model_name_or_path,
