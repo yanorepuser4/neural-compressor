@@ -29,6 +29,25 @@ onnx = LazyImport('onnx')
 ort = LazyImport('onnxruntime')
 ortq = LazyImport('onnxruntime.quantization')
 
+def find_node_by_name(onnx_model, name):
+    for node in onnx_model.graph.node:
+        if node.name == name:
+            return node
+    return None
+
+def weight_map(
+    fp32_onnx_path,
+    module_node_mapping
+):
+    weight_dict = {}
+    fp32_onnx_model = onnx.load(fp32_onnx_path)
+    for module, node in module_node_mapping.items():
+        weight_node = find_node_by_name(fp32_onnx_model, node)
+        tensor_name_list = [tensor.name for tensor in fp32_onnx_model.graph.initializer]
+        for input in weight_node.input:
+            if input in tensor_name_list:
+                weight_dict[module] = input
+    return weight_dict
 
 def update_weight_bias(
     int8_model,
@@ -61,7 +80,7 @@ def update_weight_bias(
             int8_model_dict[name] = param
         else:
             int8_model_dict[name] = param
-
+    print('int8_model_dict', int8_model_dict)
     # replace weight and bias in onnx fp32 model for QAT
     from onnx import helper
     tensor_list = [tensor for tensor in fp32_onnx_model.graph.initializer]
@@ -568,9 +587,11 @@ def qdq_int32_bias(
     return int8_onnx_model
 
 def qdq_fp32_bias_qdq(
+    int8_model,
     int8_onnx_model,
     quantize_nodes,
     quant_format,
+    weight_mapping,
 ):
     """Excute post-process on onnx int8 model with recipe 'QDQ_OP_FP32_BIAS_QDQ'.
 
@@ -609,6 +630,7 @@ def qdq_fp32_bias_qdq(
     #     QuantizeLinear
     #           |
     #    DequantizeLinear
+    from onnx import TensorProto
     if quant_format == ortq.QuantFormat.QDQ:
         for node in int8_onnx_model.graph.node:
             if node.name in quantize_nodes and node.op_type == 'MatMul':
@@ -634,10 +656,53 @@ def qdq_fp32_bias_qdq(
                                     outputs=[node.output[0]],
                                     name=node.name + '_matmulintegertofloat',
                                     domain='com.microsoft')
+                
+                mul_node = onnx.helper.make_node("Mul",
+                                    inputs=[b_scale, a_scale],
+                                    outputs=[node.output[0] + '_Mul_out'],
+                                    name=node.name + '_mul')
+                
+                for idx in range(len(add_node.input)):
+                    if add_node.input[idx] != dequantizelinear_node.output[0]:
+                        bias = add_node.input[idx]
+                
+                div_node = onnx.helper.make_node("Div",
+                                    inputs=[bias, node.output[0] + '_Mul_out'],
+                                    outputs=[node.output[0] + '_Div_out'],
+                                    name=node.name + '_div')
+
+                cast_node = onnx.helper.make_node("Cast",
+                                    inputs=[node.output[0] + '_Div_out'],
+                                    outputs=[node.output[0] + '_Cast_out'],
+                                    to=getattr(TensorProto, 'INT32'),
+                                    name=node.name + '_cast')
+                
+                for tensor in int8_onnx_model.graph.initializer:
+                    if tensor.name == b_zero_point:
+                        # import pdb
+                        # pdb.set_trace()
+                        b_zero_point_int32_name = tensor.name + '_int32'
+                        b_zero_point_int32 = onnx.helper.make_tensor(b_zero_point_int32_name, 
+                                                                     TensorProto.INT32, 
+                                                                     dims=tensor.dims, 
+                                                                     vals=onnx.numpy_helper.to_array(tensor))
+                int8_onnx_model.graph.initializer.append(b_zero_point_int32)
+                new_dequantizelinear_node = onnx.helper.make_node(
+                                    "DequantizeLinear",
+                                    inputs=[node.output[0] + '_Cast_out', 
+                                            node.output[0] + '_Mul_out', 
+                                            b_zero_point_int32_name],
+                                    outputs=[node.output[0] + '_Add_out'],
+                                    name=node.name + '_add',
+                                )
+                                
+                new_dequantizelinear_node.attribute.extend([onnx.helper.make_attribute("axis", 0)])
 
                 for idx in range(len(add_node.input)):
                     if add_node.input[idx] == dequantizelinear_node.output[0]:
                         add_node.input[idx] = node.output[0]
+                    else:
+                        add_node.input[idx] = node.output[0] + '_Add_out'
 
                 quantizelinear_node = onnx.helper.make_node("QuantizeLinear",
                                     inputs=[add_node.output[0] +'_add', y_scale, y_zero_point],
@@ -649,9 +714,79 @@ def qdq_fp32_bias_qdq(
                 add_node.output[0] = add_node.output[0] +'_add'
 
                 remove_nodes.add(node.name)
-                int8_onnx_model.graph.node.extend([matmulintegertofloat_node, quantizelinear_node])
+                # import pdb
+                # pdb.set_trace()
+                
+                b_info = {}
+                old_b = []
+                # import pdb
+                # pdb.set_trace()
+                print('b b_scale', b, b_scale)
+                for tensor in int8_onnx_model.graph.initializer:
+                    if tensor.name in [b, b_scale, b_zero_point]:
+                        b_info[tensor.name] = {'dtype': tensor.data_type, 'dims': tensor.dims}
+                        old_b.append(tensor)
+                for tensor in old_b:
+                    int8_onnx_model.graph.initializer.remove(tensor)
+                # import pdb
+                # pdb.set_trace()
+                model_dict = int8_model.state_dict()
+                # import pdb
+                # pdb.set_trace()
+
+                weight_module = None
+                # import pdb
+                # pdb.set_trace()
+                if b.split('_quantized')[0] in weight_mapping.values():
+                    weight_module = list(weight_mapping.keys())[list(weight_mapping.values()).index(b.split('_quantized')[0])]
+                if weight_module and weight_module in weight_mapping:
+                    find_weight_module = False
+                    if weight_module + '._packed_params._packed_params' in model_dict:
+                        weight_module = weight_module + '._packed_params._packed_params'
+                        find_weight_module = True
+                    elif weight_module + '.module._packed_params._packed_params' in model_dict:
+                        weight_module = weight_module + '.module._packed_params._packed_params'
+                        find_weight_module = True
+                    elif weight_module + '._packed_params._packed_weight' in model_dict:
+                        weight_module = weight_module + '._packed_params._packed_weight'
+                        find_weight_module = True
+                    assert find_weight_module, "not find mapped weight module for {}".format(b.split('_quantized')[0]) 
+                    new_b_numpy = model_dict[weight_module][0].int_repr().detach().cpu().numpy()
+                    # if b_info[b]['dims'] != list(new_b_numpy.shape):
+                    new_b_numpy = new_b_numpy.transpose()
+                    new_b = onnx.helper.make_tensor(b, b_info[b]['dtype'],  dims=b_info[b]['dims'], vals=new_b_numpy)
+                    # import pdb
+                    # pdb.set_trace()
+                    print('update quantized weight from {} to {}'.format(b, weight_module))
+                    # print(model_dict[weight_module][0].int_repr().detach().cpu().numpy() == onnx.numpy_helper.to_array(new_b))
+                    # import pdb
+                    # pdb.set_trace()
+                    if model_dict[weight_module][0].qscheme() == torch.per_channel_affine:
+                        new_b_scale = model_dict[weight_module][0].q_per_channel_scales().detach().cpu().numpy()
+                        new_b_zero_point = model_dict[weight_module][0].q_per_channel_zero_points().detach().cpu().numpy()
+                    else:
+                        new_b_scale = model_dict[weight_module][0].q_scale().detach().cpu().numpy()
+                        new_b_zero_point = model_dict[weight_module][0].q_zero_point().detach().cpu().numpy()
+                    print('update weight scale/zp')
+                    # b_zp?
+                    new_b_scale = onnx.helper.make_tensor(b_scale, b_info[b_scale]['dtype'],  dims=b_info[b_scale]['dims'], vals=new_b_scale)
+                    new_b_zero_point = onnx.helper.make_tensor(b_zero_point, b_info[b_zero_point]['dtype'],  dims=b_info[b_zero_point]['dims'], vals=new_b_zero_point)
+                int8_onnx_model.graph.initializer.extend([new_b, new_b_scale, new_b_zero_point])
+
+                int8_onnx_model.graph.node.extend([matmulintegertofloat_node, 
+                                                   mul_node, 
+                                                   div_node, 
+                                                   cast_node, 
+                                                   new_dequantizelinear_node,
+                                                   quantizelinear_node])
+                
+
+            # if node.op_type == 'QGemm':
+
+
 
         int8_onnx_model = remove_nodes_by_name(int8_onnx_model, remove_nodes)
+
     return int8_onnx_model
 
 def torch_to_fp32_onnx(
@@ -681,9 +816,9 @@ def torch_to_fp32_onnx(
         do_constant_folding (bool, optional): do constant folding or not. Defaults to True.
         verbose (bool, optional): dump verbose or not. Defaults to True.
     """
-    from neural_compressor.utils.pytorch import is_int8_model
-    assert is_int8_model(fp32_model) == False, "The fp32 model is replaced during quantization. " + \
-        "please customize a eval_func when quantizing, if not, such as `lambda x: 1`."
+    # from neural_compressor.utils.pytorch import is_int8_model
+    # assert is_int8_model(fp32_model) == False, "The fp32 model is replaced during quantization. " + \
+    #     "please customize a eval_func when quantizing, if not, such as `lambda x: 1`."
     if input_names is None and \
       (isinstance(example_inputs, dict) or isinstance(example_inputs, UserDict)):
         input_names = list(example_inputs.keys())
@@ -736,7 +871,7 @@ def torch_to_int8_onnx(
     output_names=None,
     quant_format: str = 'QDQ',
     dtype: str = 'U8S8',
-    recipe: str = 'QDQ_OP_FP32_BIAS',
+    recipe: str = 'QDQ_OP_FP32_BIAS_QDQ',
 ):
     """Export INT8 PyTorch model into INT8 ONNX model.
 
@@ -783,9 +918,15 @@ def torch_to_int8_onnx(
         dynamic_axes=dynamic_axes,
         verbose=False,
     )
+    from neural_compressor.model.onnx_model import ONNXModel
+    fp32_onnx_model = ONNXModel(fp32_onnx_path)
+    fp32_onnx_model.replace_gemm_with_matmul()
+    onnx.save_model(fp32_onnx_model.model, fp32_onnx_path)
+    del fp32_onnx_model
 
     activation_type, weight_type = set_data_type(dtype)
     module_node_mapping = get_node_mapping(fp32_model, fp32_onnx_path)
+    print('module_node_mapping', module_node_mapping)
     quantize_nodes = get_quantizable_onnx_ops(int8_model, module_node_mapping)
 
     if q_config['approach'] == 'quant_aware_training':
@@ -793,7 +934,12 @@ def torch_to_int8_onnx(
     if q_config['approach'] != 'post_training_dynamic_quant':
         int8_scale_info = q_config['scale_info']
         scale_mapping = build_scale_mapping(fp32_onnx_path, module_node_mapping, int8_scale_info)
-
+    print('scale_mapping', scale_mapping)
+    weight_mapping = weight_map(fp32_onnx_path, module_node_mapping)
+    print('weight_mapping', weight_mapping)
+    # exit(0)
+    # import pdb
+    # pdb.set_trace()
     quant_format = ortq.QuantFormat.QOperator if quant_format != 'QDQ' else ortq.QuantFormat.QDQ
 
     extra_options = {'OpTypesToExcludeOutputQuantizatioin': ['MatMul']} \
@@ -841,7 +987,7 @@ def torch_to_int8_onnx(
         elif recipe == 'QDQ_OP_INT32_BIAS':
             int8_onnx_model = qdq_int32_bias(int8_onnx_model, quantize_nodes, quant_format)
         elif recipe == 'QDQ_OP_FP32_BIAS_QDQ':
-            int8_onnx_model = qdq_fp32_bias_qdq(int8_onnx_model, quantize_nodes, quant_format)
+            int8_onnx_model = qdq_fp32_bias_qdq(int8_model, int8_onnx_model, quantize_nodes, quant_format, weight_mapping)
         
         onnx.save(int8_onnx_model, save_path)
 
