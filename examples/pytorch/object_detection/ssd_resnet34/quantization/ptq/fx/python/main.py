@@ -564,7 +564,7 @@ def main():
         post_proc.finalize(result_dict, ds, output_dir=args.output)
         accu = add_results(final_results, "{}".format(scenario),
                         result_dict, last_timeing, time.time() - ds.last_loaded, args.accuracy)
-        print('Accuracy: %.3f ' % (accu))
+        print('Accuracy: %.3f ' % (accu/100))
         return accu
 
     def benchmark_func(model):
