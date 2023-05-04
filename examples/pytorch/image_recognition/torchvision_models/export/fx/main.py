@@ -437,7 +437,7 @@ def main():
         top1 = metrics['topk']()
 
         conf = PostTrainingQuantConfig(calibration_sampling_size=[300],
-            precision='fp8_e5m2', approach='static', batchnorm_calibration_sampling_size=[4000])
+            precision='fp8_e5m2', approach='static')
         q_model = quantization.fit(args.output_model,
                                     conf,
                                     calib_dataloader=calib_dataloader,
