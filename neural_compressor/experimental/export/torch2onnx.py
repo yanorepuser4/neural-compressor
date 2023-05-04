@@ -665,6 +665,7 @@ def torch_to_fp32_onnx(
     output_names=None,
     do_constant_folding=True,
     verbose=True,
+    training_mode=0
 ):
     """Export FP32 PyTorch model into FP32 ONNX model.
 
@@ -680,6 +681,7 @@ def torch_to_fp32_onnx(
         output_names (list, optional): output names. Defaults to None.
         do_constant_folding (bool, optional): do constant folding or not. Defaults to True.
         verbose (bool, optional): dump verbose or not. Defaults to True.
+        training_mode (int, optional): training mode of the model. 0: EVAL, 1: PRESERVE, 2: TRAINING. Defaults to 0.
     """
     if input_names is None and \
       (isinstance(example_inputs, dict) or isinstance(example_inputs, UserDict)):
@@ -701,6 +703,13 @@ def torch_to_fp32_onnx(
             input_names = new_input_names
             example_inputs = new_example_inputs
 
+    if training_mode == 1:
+        training = torch.onnx.TrainingMode.PRESERVE
+    elif training_mode == 2:
+        training = torch.onnx.TrainingMode.TRAINING
+    else:
+        training = torch.onnx.TrainingMode.EVAL
+
     torch.onnx.export(
         fp32_model,
         input2tuple(example_inputs),
@@ -709,6 +718,7 @@ def torch_to_fp32_onnx(
         input_names=input_names,
         output_names=output_names,
         dynamic_axes=dynamic_axes,
+        training=training,
         do_constant_folding=do_constant_folding,
     )
     if verbose:

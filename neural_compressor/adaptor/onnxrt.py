@@ -39,31 +39,61 @@ import sys
 from mpemu.pytquant.cpp import fpemu_cpp
 from onnxruntime_extensions import onnx_op, PyCustomOpDef, make_onnx_model
 from onnx import helper, numpy_helper, onnx_pb as onnx_proto
-#if self.precision == 'fp8_e5m2':
-#    scale = 1.0
-#    dtype = 'E5M2'
-#else:
-#    scale = None
-#    dtype = self.precision.split('_')[-1].upper()
 
-#@onnx_op(op_type="FP8_converter_2",
-#         inputs=[PyCustomOpDef.dt_float, PyCustomOpDef.dt_float])
-#def FP8_converter_2(x, y):
-#    input = torch.from_numpy(x)
-#    size = input.nelement()
-#    outputs = fpemu_cpp.fpemu_cpp.forward(input.contiguous(), 'E5M2_RNE', size, False, y)
-#    output = outputs[0]
-#    return output.cpu().detach().numpy()
+def get_fp8_scale(tensor, qtconfig):
+    amax = torch.max(torch.abs(tensor))
+    HF_max = get_flt_max(qtconfig)
+    scale = HF_max/ amax
+    if torch.isinf(scale):
+        scale = torch.tensor(3.4E38)
+    return scale
 
-#@onnx_op(op_type="FP8_converter_1",
-#         inputs=[PyCustomOpDef.dt_float])
-#def FP8_converter_1(x):
-#    input = torch.from_numpy(x)
-#    size = input.nelement()
-#    outputs = fpemu_cpp.fpemu_cpp.forward(input.contiguous(), 'E5M2_RNE', size, False, 1.0, False, 1)
-#    output = outputs[0]
-#    return output.cpu().detach().numpy()
+# FP8: Single entry function for quantizing tensor.
+def quantize_tensor(tensor, qtconfig, scale=None, inplace=False):
+    if not isinstance(tensor, torch.Tensor):
+        return tensor
 
+    qtconfig.check_validity(qtconfig.dtype, qtconfig.scheme)
+    mode = qtconfig.dtype.upper()
+
+    if not scale:
+        scale = get_fp8_scale(tensor, qtconfig)
+
+    if qtconfig.scheme is not None:
+        mode += "_"+qtconfig.scheme.upper()
+
+    from mpemu.pytquant.cpp import fpemu_cpp
+    try:
+        tensor_q = fpemu_cpp.FPEmuOp.apply(tensor, mode, inplace, scale)
+    except:
+        # for dlrm, tensor is too large
+        split_parts = 10
+        tensor_q = None
+        num = int(tensor.shape[0] / split_parts)
+        for i in range(split_parts):
+            if i ==0:
+                tensor_q = fpemu_cpp.FPEmuOp.apply(tensor[:num], mode, True, scale)
+            elif i == split_parts - 1:
+                tensor_q = torch.cat((tensor_q, fpemu_cpp.FPEmuOp.apply(tensor[i*num:], mode, True, scale)), 0)
+            else:
+                tensor_q = torch.cat((tensor_q, fpemu_cpp.FPEmuOp.apply(tensor[i*num:(i+1)*num], mode, True, scale)), 0)
+    return tensor_q
+
+def get_flt_max(precision):
+    if precision in ["fp8_e5m2"]:
+        return float(57344.0)
+    elif precision in ["fp8_e4m3"]:
+        return float(448.0)
+    elif precision in ["fp8_e3m4"]:
+        return float(30.0)
+
+def get_flt_min(precision):
+    if precision in ["fp8_e5m2"]:
+        return float(57344.0)
+    elif precision in ["fp8_e4m3"]:
+        return float(1.9531250E-03)
+    elif precision in ["fp8_e3m4"]:
+        return float(1.5625000E-02)
 
 onnx = LazyImport("onnx")
 ort = LazyImport("onnxruntime")
@@ -176,7 +206,6 @@ class ONNXRUNTIMEAdaptor(Adaptor):
         if ort_version < ONNXRT152_VERSION: # pragma: no cover
             logger.warning("Quantize input needs onnxruntime 1.5.2 or newer.")
             return model
-        if model.model.opset_import[0].version < 11: # pragma: no cover
             logger.warning("Quantize input needs model opset 11 or newer.")
         from neural_compressor.adaptor.ox_utils.util import QuantizationMode
         if self.format == "qlinearops":
@@ -399,16 +428,25 @@ class ONNXRUNTIMEAdaptor(Adaptor):
     def _get_bn_update(self, model, data_loader, quantize_config, iterations):
         from neural_compressor.adaptor.ox_utils.calibration import ONNXRTAugment
         from neural_compressor.model.onnx_model import ONNXModel
+        import copy
         if not isinstance(model, ONNXModel):
             model = ONNXModel(model)
         augment = ONNXRTAugment(model, \
                   data_loader, ['BatchNormalization'], \
-                  iterations=list(range(0, quantize_config['calib_iteration'])),
+                  iterations=list(range(0, iterations)),
                   backend=self.backend, reduce_range=self.reduce_range)
         update_data = augment.update_BN()
+        new_nodes = []
+        new_inits = []
         for name, val in update_data.items():
-            if self.pre_optimized_model.get_initializer(name):
-                self.pre_optimized_model.set_initializer(self.pre_optimized_model.get_initializer(name), val[0].cpu().detach().numpy())
+            nodes = [i for i in self.pre_optimized_model.nodes() if name in i.input and i.op_type == 'BatchNormalization']
+            if len(nodes) == 0:
+                continue
+            for node in nodes:
+                if self.pre_optimized_model.get_initializer(node.input[3]):
+                    self.pre_optimized_model.set_initializer(node.input[3], val[0].cpu().detach().numpy())
+                if self.pre_optimized_model.get_initializer(node.input[4]):
+                    self.pre_optimized_model.set_initializer(node.input[4], val[1].cpu().detach().numpy())
 
     def _get_quantize_params(self, model, data_loader, quantize_config, iterations):
         from neural_compressor.adaptor.ox_utils.calibration import ONNXRTAugment
@@ -524,46 +562,21 @@ class ONNXRUNTIMEAdaptor(Adaptor):
         from neural_compressor.adaptor.ox_utils.util import \
             remove_init_from_model_input, split_shared_bias
         remove_init_from_model_input(model)
-        sess_options = ort.SessionOptions()
-        level = self.query_handler.get_graph_optimization()
-        if self.graph_optimization.level:
-            optimization_levels = {
-                    'DISABLE_ALL': ort.GraphOptimizationLevel.ORT_DISABLE_ALL,
-                    'ENABLE_BASIC': ort.GraphOptimizationLevel.ORT_ENABLE_BASIC,
-                    'ENABLE_EXTENDED': ort.GraphOptimizationLevel.ORT_ENABLE_EXTENDED,
-                    'ENABLE_ALL': ort.GraphOptimizationLevel.ORT_ENABLE_ALL}
-            assert self.graph_optimization.level in optimization_levels, "the optimization \
-                                      choices are {}".format(optimization_levels.keys())
-
-            level = optimization_levels[self.graph_optimization.level]
-        sess_options.graph_optimization_level = level
-        sess_options.optimized_model_filepath = os.path.join(self.work_space, \
-            "Optimized_model.onnx")
-        if sys.version_info < (3,10) and find_spec('onnxruntime_extensions'): # pragma: no cover
-            from onnxruntime_extensions import get_library_path
-            sess_options.register_custom_ops_library(get_library_path())
-        if not model.large_size:
-            ort.InferenceSession(model.model.SerializeToString(),
-                                 sess_options,
-                                 providers=[self.backend])
-        elif model.model_path is not None: # pragma: no cover
-            ort.InferenceSession(model.model_path,
-                                 sess_options,
-                                 providers=[self.backend])
-        else: # pragma: no cover 
-            logger.warning('Please use model path instead of onnx model object to quantize')
-
-        tmp_model = onnx.load(sess_options.optimized_model_filepath, load_external_data=False)
+        tmp_model = model.model
         if model.large_size: # pragma: no cover
             from onnx.external_data_helper import load_external_data_for_model
             load_external_data_for_model(tmp_model, os.path.split(model.model_path)[0])
-        model.model_path = sess_options.optimized_model_filepath
-        model.model = self._replace_gemm_with_matmul(tmp_model).model \
-            if self.graph_optimization.gemm2matmul else tmp_model
-        model.model = self._rename_node(model.model)
+        model.model = self._rename_node(tmp_model)
         model = self._revert_fusedconv(model)
         model = split_shared_bias(model)
+        model.remove_unused_constant()
         model.topological_sort()
+        for node in model.nodes():
+            if node.op_type == 'BatchNormalization':
+                for idx, attr in enumerate(node.attribute):
+                    if attr.name == 'training_mode':
+                        attr.i = 1
+                node.output.extend([node.output[0] + '_1', node.output[0] + '_2']) 
         self.pre_optimized_model = copy.deepcopy(model)
 
     def _revert_fusedconv(self, model):
@@ -1177,52 +1190,94 @@ class ONNXRT_FP8Adaptor(ONNXRUNTIMEAdaptor):
 
     def _fp8_quantize(self, model, op_config, params=None):
         add_nodes = []
-        add_inits = []
+        add_inits = model.graph.initializer
         fp8_nodes = []
+        fp8_inits = []
+        fp8_new_nodes = {}
         input_name_to_nodes = {}
         output_name_to_node = {}
         for node in model.graph.node:
             for inp in node.input:
-                if find_by_name(inp, model.graph.initializer) is None:
+                if find_by_name(inp, model.graph.initializer) is None: # is activation
                     if inp not in input_name_to_nodes:
                         input_name_to_nodes[inp] = [node.name]
                     else:
                         input_name_to_nodes[inp].append(node.name)
             for output in node.output:
-                output_name_to_node[output] = node.name
+                output_name_to_node[output] = node
                     
         for node in model.graph.node:
             if node.name in op_config and any([i not in input_name_to_nodes for i in node.input]):
+                #and any([i not in input_name_to_nodes for i in node.input]):
                 if node.op_type == 'Add':
                     activation = [i for i in node.input if find_by_name(i, model.graph.initializer) is None][0]
-                    if output_name_to_node[activation] not in fp8_nodes:
+                    if output_name_to_node[activation].name not in fp8_nodes:
+                        add_nodes.append(node)
+                        continue
+                    if output_name_to_node[activation].op_type != 'MatMul':
                         add_nodes.append(node)
                         continue
 
-                for idx, inp in enumerate(node.input):
+                mode = '_'.join((self.precision.split('_')[-1].upper(), 'RNE'))
+                for idx in [0, 1]:
+                    inp = node.input[idx]
                     init = find_by_name(inp, model.graph.initializer)
                     if init is not None:
                         array = numpy_helper.to_array(init)
                         input = torch.from_numpy(copy.deepcopy(array))
                         size = input.nelement()
-                        outputs = fpemu_cpp.fpemu_cpp.forward(input.contiguous(), 'E5M2_RNE', size, False, 1.0, False, 1)
+                        if self.precision == 'fp8_e5m2':
+                            scale = 1.0
+                        else:
+                            scale = get_fp8_scale(input, self.precision)
+                        outputs = fpemu_cpp.fpemu_cpp.forward(input.contiguous(), mode, size, False, scale, False, 1)
                         output = outputs[0]
                         init.float_data[:] = []
                         init.int32_data[:] = []
                         init.raw_data = output.cpu().detach().numpy().tostring()
                     elif self.precision == 'fp8_e5m2':
-                        new = helper.make_node('FP8_converter_1', [inp], ['fp8_output_'+str(len(add_nodes))],
-                                              name='FP8_converter_1_'+str(len(add_nodes)), domain='ai.onnx.contrib')
-                        node.input[idx] = 'fp8_output_'+str(len(add_nodes))
+                        new = helper.make_node(self.precision, [inp], ['fp8_output_'+str(len(add_nodes))],
+                                              name='_'.join((self.precision, str(len(add_nodes)))), domain='ai.onnx.contrib')
+                        node.input[idx] = new.output[0]
                         add_nodes.append(new)
+                    else:
+                        if self.dynamic:
+                            if inp + '_abs' in fp8_new_nodes:
+                                node.input[idx] = fp8_new_nodes[inp + '_abs'].output[0]
+                                fp8_nodes.append(node.name)
+                                continue
+                            else:
+                                abs_node = helper.make_node('Abs', [inp], [inp + '_abs'],
+                                                      name='_'.join(('FP8_Abs', str(len(add_nodes)))))
+ 
+                                max_node = helper.make_node('ReduceMax', abs_node.output, [abs_node.output[0] + '_max'],
+                                                      name='_'.join(('FP8_Max', str(len(add_nodes)))))
+
+                                init = helper.make_tensor('_'.join(('HF_max', str(len(add_nodes)))),
+                                                      onnx_proto.TensorProto.FLOAT, [], [get_flt_max(self.precision)])
+                                div_node = helper.make_node('Div', [init.name, max_node.output[0]], [inp + '_fp8_scale'],
+                                                      name='_'.join(('FP8_Div', str(len(add_nodes)))))
+
+                                new = helper.make_node(self.precision, [inp, div_node.output[0]], ['fp8_output_'+str(len(add_nodes))],
+                                                      name='_'.join((self.precision, str(len(add_nodes)))), domain='ai.onnx.contrib')
+                                node.input[idx] = new.output[0]
+                                add_nodes.extend([abs_node, max_node, div_node, new])
+                                if init.name not in fp8_inits:
+                                    add_inits.append(init)
+                                    fp8_inits.append(init.name)
+                                fp8_new_nodes[inp + '_abs'] = new
+                        else:
+                            scale = get_flt_max(self.precision) / max(abs(self.min_max[inp][0]), abs(self.min_max[inp][1]))
+                            init = helper.make_tensor('_'.join(('scale', str(len(add_nodes)))), onnx_proto.TensorProto.FLOAT, [], [scale])
+                            new = helper.make_node(self.precision, [inp, init.name], ['fp8_output_'+str(len(add_nodes))],
+                                                  name='_'.join((self.precision, str(len(add_nodes)))), domain='ai.onnx.contrib')
+                            node.input[idx] = new.output[0]
+                            add_nodes.append(new)
+                            add_inits.append(init)
+ 
                     fp8_nodes.append(node.name)
-                    #else:
-                    #    new = helper.make_node('FP8_converter_2', [inp], ['output_'+str(len(add_nodes))],
-                    #                          domain='ai.onnx.contrib')
-                    #    node.input[idx] = 'output_'+str(len(add_nodes))
-                    #    add_nodes.append(new)
             add_nodes.append(node)
-        graph = helper.make_graph(add_nodes, 'fp8_model', model.graph.input, model.graph.output, model.graph.initializer)
+        graph = helper.make_graph(add_nodes, 'fp8_model', model.graph.input, model.graph.output, add_inits)
         new_model = make_onnx_model(graph, opset_version=model.opset_import[0].version)
 
         return new_model
@@ -1244,35 +1299,65 @@ class ONNXRT_FP8Adaptor(ONNXRUNTIMEAdaptor):
         """
         assert q_func is None, "quantization aware training has not been supported on ONNXRUNTIME"
 
-        iterations = tune_cfg.get('calib_iteration', 1)
+        def calib():
+            calib_sampling_size = tune_cfg.get('calib_sampling_size', 1)
+            iterations = tune_cfg.get('calib_iteration', 1)
+            if self.precision != 'fp8_e5m2':
+                if isinstance(data_loader, BaseDataLoader):
+                    batch_size = data_loader.batch_size
+                    try:
+                        for i in range(batch_size):
+                            if calib_sampling_size % (batch_size - i) == 0:
+                                calib_batch_size = batch_size - i
+                                if i != 0:  # pragma: no cover
+                                    logger.warning("Reset `calibration.dataloader.batch_size` field "
+                                                   "to {}".format(calib_batch_size) +
+                                                   " to make sure the sampling_size is "
+                                                   "divisible exactly by batch size")
+                                break
+                        tmp_iterations = int(math.ceil(calib_sampling_size / calib_batch_size))
+                        data_loader.batch(calib_batch_size)
+                        quantize_params = self._get_quantize_params(tmp_model, data_loader, \
+                                                                    quantize_config, tmp_iterations)
+                    except Exception as e:  # pragma: no cover
+                        if 'Got invalid dimensions for input' in str(e):
+                            logger.warning("Please set sampling_size to a multiple of {}".format(
+                                str(e).partition('Expected: ')[2].partition('\n')[0]))
+                            exit(0)
+                        logger.warning(
+                            "Fail to forward with batch size={}, set to {} now.".
+                            format(batch_size, 1))
+                        data_loader.batch(1)
+                        quantize_params = self._get_quantize_params(tmp_model, data_loader, \
+                                                  quantize_config, calib_sampling_size)
+                else:  # pragma: no cover
+                    if hasattr(data_loader, 'batch_size') and \
+                      calib_sampling_size % data_loader.batch_size != 0:
+                        logger.warning(
+                            "Please note that calibration sampling size {} " \
+                            "isn't divisible exactly by batch size {}. " \
+                            "So the real sampling size is {}.".
+                            format(calib_sampling_size, data_loader.batch_size,
+                                   data_loader.batch_size * iterations))
+                    quantize_params = self._get_quantize_params(tmp_model, data_loader, \
+                                              quantize_config, iterations)
+            else:
+                quantize_params = None
+            return quantize_params 
 
         self.quantizable_ops = self._query_quantizable_ops(model.model)
         quantize_config = self._cfg_to_quantize_config(tune_cfg)
-        #fp8_model = self._fp8_quantize(copy.deepcopy(model.model), quantize_config, None)
-        #self._get_bn_update(fp8_model, data_loader, quantize_config, iterations)
-        model = self.pre_optimized_model if self.pre_optimized_model else model
-        ort_version = Version(ort.__version__)
-        if ort_version < ONNXRT152_VERSION: # pragma: no cover
-            logger.warning("Quantize input needs onnxruntime 1.5.2 or newer.")
-            return model
-        if model.model.opset_import[0].version < 11: # pragma: no cover
-            logger.warning("Quantize input needs model opset 11 or newer.")
-        #from neural_compressor.adaptor.ox_utils.util import QuantizationMode
-        #if self.static:
-        #    self._prepare_observer(q_model._model, model_qconfig_dict)
-        #    self._calibration_for_scale(q_model._model, dataloader, model_qconfig_dict)
-        #else:
-        #    format = QuantizationMode.IntegerOps
-        tmp_model = copy.deepcopy(model)
 
-        
-        calib_sampling_size = tune_cfg.get('calib_sampling_size', 1)
-        if self.precision != 'fp8_e5m2':
+        tmp_model = copy.deepcopy(model)
+        if 'BatchNormalization' in set([i.op_type for i in model.nodes()]):
+            logger.warning("Update BN")
+            bn_calib_sampling_size = tune_cfg.get('bn_calib_sampling_size', 3000)
+            iterations = math.ceil(bn_calib_sampling_size / data_loader.batch_size)
             if isinstance(data_loader, BaseDataLoader):
                 batch_size = data_loader.batch_size
                 try:
                     for i in range(batch_size):
-                        if calib_sampling_size % (batch_size - i) == 0:
+                        if bn_calib_sampling_size % (batch_size - i) == 0:
                             calib_batch_size = batch_size - i
                             if i != 0:  # pragma: no cover
                                 logger.warning("Reset `calibration.dataloader.batch_size` field "
@@ -1280,10 +1365,8 @@ class ONNXRT_FP8Adaptor(ONNXRUNTIMEAdaptor):
                                                " to make sure the sampling_size is "
                                                "divisible exactly by batch size")
                             break
-                    tmp_iterations = int(math.ceil(calib_sampling_size / calib_batch_size))
+                    tmp_iterations = int(math.ceil(bn_calib_sampling_size / calib_batch_size))
                     data_loader.batch(calib_batch_size)
-                    quantize_params = self._get_quantize_params(tmp_model, data_loader, \
-                                                                quantize_config, tmp_iterations)
                 except Exception as e:  # pragma: no cover
                     if 'Got invalid dimensions for input' in str(e):
                         logger.warning("Please set sampling_size to a multiple of {}".format(
@@ -1293,38 +1376,43 @@ class ONNXRT_FP8Adaptor(ONNXRUNTIMEAdaptor):
                         "Fail to forward with batch size={}, set to {} now.".
                         format(batch_size, 1))
                     data_loader.batch(1)
-                    quantize_params = self._get_quantize_params(tmp_model, data_loader, \
-                                              quantize_config, calib_sampling_size)
             else:  # pragma: no cover
                 if hasattr(data_loader, 'batch_size') and \
-                  calib_sampling_size % data_loader.batch_size != 0:
+                  bn_calib_sampling_size % data_loader.batch_size != 0:
                     logger.warning(
                         "Please note that calibration sampling size {} " \
                         "isn't divisible exactly by batch size {}. " \
                         "So the real sampling size is {}.".
-                        format(calib_sampling_size, data_loader.batch_size,
+                        format(bn_calib_sampling_size, data_loader.batch_size,
                                data_loader.batch_size * iterations))
-                quantize_params = self._get_quantize_params(tmp_model, data_loader, \
-                                          quantize_config, iterations)
+            if self.static:
+                quantize_params = calib()
+            fp8_model = self._fp8_quantize(copy.deepcopy(model.model), quantize_config, None)
+            self._get_bn_update(fp8_model, data_loader, quantize_config, iterations)
+        model = self.pre_optimized_model if self.pre_optimized_model else model
+        ort_version = Version(ort.__version__)
+        if ort_version < ONNXRT152_VERSION: # pragma: no cover
+            logger.warning("Quantize input needs onnxruntime 1.5.2 or newer.")
+            return model
+        if model.model.opset_import[0].version < 11: # pragma: no cover
+            logger.warning("Quantize input needs model opset 11 or newer.")
+
+        if not self.dynamic:
+            quantize_params = calib()
         else:
             quantize_params = None
+
         self.quantize_params = quantize_params
-        #from neural_compressor.adaptor.ox_utils.quantizer import Quantizer
-        #quantizer = Quantizer(copy.deepcopy(model),
-        #    quantize_config,
-        #    format,
-        #    self.static,
-        #    quantize_params,
-        #    self.quantizable_op_types,
-        #    self.query_handler.get_fallback_list(),
-        #    self.reduce_range)
-        #quantizer.quantize_model()
-        #tmp_model.q_config = self._generate_qconfig(model.model, tune_cfg, quantize_params)
-        #tmp_model.model = quantizer.model.model
-        #self.quantize_config = quantize_config # update so other methods can know current configs
         tmp_model.model = self._fp8_quantize(model.model, quantize_config, quantize_params)
         self._dump_model_op_stats(tmp_model)
         tmp_model.topological_sort()
+        for node in tmp_model.nodes():
+            if node.op_type == 'BatchNormalization':
+                attr = [i for i in node.attribute if i.name == 'training_mode']
+                if len(attr) > 0:
+                    node.attribute.remove(attr[0])
+                    node.output.pop(1)
+                    node.output.pop(1)
         return tmp_model
 
     def _dump_model_op_stats(self, model):
@@ -1339,7 +1427,7 @@ class ONNXRT_FP8Adaptor(ONNXRUNTIMEAdaptor):
 
         for node in model.model.graph.node:
             inputs = node.input
-            if any(['fp8_output_' in i for i in inputs]):
+            if any(['fp8_output_' in i for i in inputs]) and 'fp8' not in node.op_type:
                 res[node.op_type]['FP8'] += 1
 
             elif node.op_type in res:
@@ -1389,9 +1477,7 @@ class ONNXRT_FP8Adaptor(ONNXRUNTIMEAdaptor):
             cores_per_instance = int(os.environ.get('CORES_PER_INSTANCE'))
             assert cores_per_instance > 0, "benchmark cores_per_instance should greater than 0"
             sess_options.intra_op_num_threads = cores_per_instance
-
         from onnxruntime_extensions import get_library_path
-        sess_options.intra_op_num_threads = 24
         sess_options.register_custom_ops_library(get_library_path())
         session = ort.InferenceSession(self.work_space + 'eval.onnx',
                                        sess_options,
@@ -1412,25 +1498,22 @@ class ONNXRT_FP8Adaptor(ONNXRUNTIMEAdaptor):
 
         def eval_func(dataloader):
             for idx, (inputs, labels) in enumerate(dataloader):
-                if not isinstance(labels, list):
-                    labels = [labels]
-                if len_inputs == 1:
-                    ort_inputs.update(
-                        inputs if isinstance(inputs, dict) else {inputs_names[0]: inputs}
-                    )
+                if isinstance(inputs, dict):
+                    ort_inputs.update(inputs)
+                elif len_inputs > 1:
+                    for i in range(len_inputs):
+                        if not isinstance(inputs[i], np.ndarray):
+                            ort_inputs.update({inputs_names[i]: np.array(inputs[i])})
+                        else:
+                            ort_inputs.update({inputs_names[i]: inputs[i]})
                 else:
-                    assert len_inputs == len(inputs), \
-                        'number of input tensors must align with graph inputs'
+                    ort_inputs.update({inputs_names[0]: inputs} if isinstance(inputs, np.ndarray) \
+                        else {inputs_names[0]: np.array(inputs)})
 
-                    if isinstance(inputs, dict):  # pragma: no cover
-                        ort_inputs.update(inputs)
-                    else:
-                        for i in range(len_inputs):
-                            # in case dataloader contains non-array input
-                            if not isinstance(inputs[i], np.ndarray):
-                                ort_inputs.update({inputs_names[i]: np.array(inputs[i])})
-                            else:
-                                ort_inputs.update({inputs_names[i]: inputs[i]})
+                if 'tolist' in dir(labels):
+                    labels = labels.tolist()
+                elif not isinstance(labels, list):
+                    labels = [labels]
 
                 if measurer is not None:
                     measurer.start()

@@ -91,8 +91,8 @@ class BasicTuneStrategy(TuneStrategy):
             dicts,
             q_hooks)
 
-        self.next_tune_cfg = self.next_tune_cfg_fp8 if 'fp8' in self.framework \
-                                                    else self.next_tune_cfg_int8
+        self.next_tune_cfg = self.next_tune_cfg_fp8 if 'fp8' in self.framework or \
+            'onnxrt_qoperator' in self.framework else self.next_tune_cfg_int8
 
     def next_tune_cfg_int8(self):
         """Generate and yield the next tuning config with below order.

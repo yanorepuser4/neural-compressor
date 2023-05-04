@@ -221,7 +221,6 @@ class TuneStrategy(object):
             self.eval_func = self._fake_eval_func
 
         # get fp32 model baseline
-        #self.baseline = [0, [1000]]
         if self.baseline is None:
             logger.info("Get FP32 model baseline.")
             self._fp32_model = self.model
@@ -569,8 +568,7 @@ class TuneStrategy(object):
                 framework_specific_info.update({"approach": "post_training_dynamic_quant"})
             framework_specific_info.update({"deploy_path": os.path.dirname(self.deploy_path)})
             framework_specific_info.update({'workspace_path': self.cfg.tuning.workspace.path})
-            #framework_specific_info.update({"precision": self.cfg.quantization.precision})
-            framework_specific_info.update({"precision": "fp8_e5m2"})
+            framework_specific_info.update({"precision": self.cfg.quantization.precision})
             framework_specific_info.update({'recipes': self.cfg.quantization.recipes})
             framework_specific_info.update(
                                 {'graph_optimization': OPTIONS[framework].graph_optimization})
@@ -579,8 +577,7 @@ class TuneStrategy(object):
                 framework_specific_info['backend'] == 'onnxrt_trt_ep':
                 framework_specific_info.update({'format': 'QDQ'})
                 framework = 'onnxrt_qdq'
-            if True:
-            #if 'fp8' in self.cfg.quantization.precision:
+            if 'fp8' in self.cfg.quantization.precision:
                 framework = 'onnxrt_fp8'
  
         if framework == 'pytorch_ipex' or framework == 'pytorch' or framework == 'pytorch_fx':

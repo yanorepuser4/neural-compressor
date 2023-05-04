@@ -938,7 +938,7 @@ class Torch2ONNXConfig(ExportConfig):
         )
         self.recipe = recipe
         self.kwargs = kwargs
-
+        self.training_mode = kwargs.get('training_mode', 0)
 
 class TF2ONNXConfig(ExportConfig):
     def __init__(

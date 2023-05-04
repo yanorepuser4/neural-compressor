@@ -17,6 +17,207 @@ import torch.utils.data.distributed
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torchvision.models as models
+from onnxruntime_extensions import get_library_path, onnx_op, PyCustomOpDef
+from mpemu.pytquant.cpp import fpemu_cpp
+import logging
+import argparse
+import cv2
+import numpy as np
+import onnx
+import re
+import os
+from PIL import Image
+import onnxruntime as ort
+from sklearn.metrics import accuracy_score
+
+class Squeeze:
+    def __call__(self, sample):
+        preds, labels = sample
+        return np.squeeze(preds), labels
+    
+def _topk_shape_validate(preds, labels):
+    # preds shape can be Nxclass_num or class_num(N=1 by default)
+    # it's more suitable for 'Accuracy' with preds shape Nx1(or 1) output from argmax
+    if isinstance(preds, int):
+        preds = [preds]
+        preds = np.array(preds)
+    elif isinstance(preds, np.ndarray):
+        preds = np.array(preds)
+    elif isinstance(preds, list):
+        preds = np.array(preds)
+        preds = preds.reshape((-1, preds.shape[-1]))
+
+    # consider labels just int value 1x1
+    if isinstance(labels, int):
+        labels = [labels]
+        labels = np.array(labels)
+    elif isinstance(labels, tuple):
+        labels = np.array([labels])
+        labels = labels.reshape((labels.shape[-1], -1))
+    elif isinstance(labels, list):
+        if isinstance(labels[0], int):
+            labels = np.array(labels)
+            labels = labels.reshape((labels.shape[0], 1))
+        elif isinstance(labels[0], tuple):
+            labels = np.array(labels)
+            labels = labels.reshape((labels.shape[-1], -1))
+        else:
+            labels = np.array(labels)
+    # labels most have 2 axis, 2 cases: N(or Nx1 sparse) or Nxclass_num(one-hot)
+    # only support 2 dimension one-shot labels
+    # or 1 dimension one-hot class_num will confuse with N
+
+    if len(preds.shape) == 1:
+        N = 1
+        class_num = preds.shape[0]
+        preds = preds.reshape([-1, class_num])
+    elif len(preds.shape) >= 2:
+        N = preds.shape[0]
+        preds = preds.reshape([N, -1])
+        class_num = preds.shape[1]
+
+    label_N = labels.shape[0]
+    assert label_N == N, 'labels batch size should same with preds'
+    labels = labels.reshape([N, -1])
+    # one-hot labels will have 2 dimension not equal 1
+    if labels.shape[1] != 1:
+        labels = labels.argsort()[..., -1:]
+    return preds, labels
+
+class TopK:
+    def __init__(self, k=1):
+        self.k = k
+        self.num_correct = 0
+        self.num_sample = 0
+
+    def update(self, preds, labels, sample_weight=None):
+        preds, labels = _topk_shape_validate(preds, labels)
+        preds = preds.argsort()[..., -self.k:]
+        if self.k == 1:
+            correct = accuracy_score(preds, labels, normalize=False)
+            self.num_correct += correct
+
+        else:
+            for p, l in zip(preds, labels):
+                # get top-k labels with np.argpartition
+                # p = np.argpartition(p, -self.k)[-self.k:]
+                l = l.astype('int32')
+                if l in p:
+                    self.num_correct += 1
+
+        self.num_sample += len(labels)
+
+    def reset(self):
+        self.num_correct = 0
+        self.num_sample = 0
+
+    def result(self):
+        if self.num_sample == 0:
+            logger.warning("Sample num during evaluation is 0.")
+            return 0
+        elif getattr(self, '_hvd', None) is not None:
+            allgather_num_correct = sum(self._hvd.allgather_object(self.num_correct))
+            allgather_num_sample = sum(self._hvd.allgather_object(self.num_sample))
+            return allgather_num_correct / allgather_num_sample
+        return self.num_correct / self.num_sample
+
+class Dataloader:
+    def __init__(self, dataset_location, image_list, batch_size=1):
+        self.batch_size = batch_size
+        self.image_list = []
+        self.label_list = []
+        self.resize_side = 256
+        self.crop_size = 224
+        self.mean_value = [0.485, 0.456, 0.406]
+        self.std_value = [0.229, 0.224, 0.225]
+        with open(image_list, 'r') as f:
+            for s in f:
+                image_name, label = re.split(r"\s+", s.strip())
+                src = os.path.join(dataset_location, image_name)
+                if not os.path.exists(src):
+                    continue
+
+                self.image_list.append(src)
+                self.label_list.append(int(label))
+
+    def __iter__(self):
+        batched_image = None
+        batched_label = None
+        for index, (src, label) in enumerate(zip(self.image_list, self.label_list)):
+            with Image.open(src) as image:
+
+                image = np.array(image.convert('RGB')).astype(np.float32)
+                height, width = image.shape[0], image.shape[1]
+                scale = self.resize_side / width if height > width else self.resize_side / height
+                new_height = int(height*scale)
+                new_width = int(width*scale)
+                image = cv2.resize(image, (new_height, new_width))
+                image = image / 255.
+                shape = image.shape
+                y0 = (shape[0] - self.crop_size) // 2
+                x0 = (shape[1] - self.crop_size) // 2
+                if len(image.shape) == 2:
+                    image = np.array([image])
+                    image = np.repeat(image, 3, axis=0)
+                    image = image.transpose(1, 2, 0)
+                image = image[y0:y0+self.crop_size, x0:x0+self.crop_size, :]
+                image = ((image - self.mean_value)/self.std_value).astype(np.float32)
+                image = image.transpose(2, 0, 1)
+            image = np.expand_dims(image, axis=0)
+            label = np.expand_dims(label, axis=0)
+            if batched_label is None:
+                batched_image = image
+                batched_label = label
+            else:
+                batched_image = np.append(batched_image, image, axis=0)
+                batched_label = np.append(batched_label, label, axis=0)
+            if (index + 1) % self.batch_size == 0:
+                yield batched_image, batched_label
+                batched_image = None
+                batched_label = None
+        if (index + 1) % self.batch_size != 0:
+            yield batched_image, batched_label
+
+def eval_func2(model, dataloader, metric, postprocess):
+    metric.reset()
+    sess_options = ort.SessionOptions()
+    sess_options.register_custom_ops_library(get_library_path())
+    sess = ort.InferenceSession(model.SerializeToString(), sess_options, providers=ort.get_available_providers())
+    ort_inputs = {}
+    input_names = [i.name for i in sess.get_inputs()]
+    for input_data, label in dataloader:
+        output = sess.run(None, dict(zip(input_names, [input_data])))
+        output, label = postprocess((output, label))
+        metric.update(output, label)
+    return metric.result()
+    
+@onnx_op(op_type="fp8_e5m2",
+         inputs=[PyCustomOpDef.dt_float])
+def FP8_converter_1(x):
+    input = torch.from_numpy(x)
+    size = input.nelement()
+    outputs = fpemu_cpp.fpemu_cpp.forward(input.contiguous(), 'E5M2_RNE', size, False, 1.0, False, 1)
+    output = outputs[0]
+    return output.cpu().detach().numpy()
+
+@onnx_op(op_type="fp8_e4m3",
+         inputs=[PyCustomOpDef.dt_float, PyCustomOpDef.dt_float])
+def FP8_converter_e4m3(x, y):
+    input = torch.from_numpy(x)
+    size = input.nelement()
+    outputs = fpemu_cpp.fpemu_cpp.forward(input.contiguous(), 'E4M3_RNE', size, False, y, False, 1)
+    output = outputs[0]
+    return output.cpu().detach().numpy()
+
+@onnx_op(op_type="fp8_e3m4",
+         inputs=[PyCustomOpDef.dt_float, PyCustomOpDef.dt_float])
+def FP8_converter_e4m3(x, y):
+    input = torch.from_numpy(x)
+    size = input.nelement()
+    outputs = fpemu_cpp.fpemu_cpp.forward(input.contiguous(), 'E3M4_RNE', size, False, y, False, 1)
+    output = outputs[0]
+    return output.cpu().detach().numpy()
+
 
 model_names = sorted(name for name in models.__dict__
     if name.islower() and not name.startswith("__")
@@ -98,10 +299,10 @@ parser.add_argument('--quant_format', default='QDQ', choices=['QDQ', 'QLinear'],
 
 best_acc1 = 0
 
+args = parser.parse_args()
 
 def main():
-    args = parser.parse_args()
-
+    
     if args.seed is not None:
         random.seed(args.seed)
         torch.manual_seed(args.seed)
@@ -137,47 +338,27 @@ def main():
         else:
             print("=> no checkpoint found at '{}'".format(args.resume))
 
-    # Data loading code
-    traindir = os.path.join(args.data, 'train')
-    valdir = os.path.join(args.data, 'val')
-    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                     std=[0.229, 0.224, 0.225])
-
-    train_dataset = datasets.ImageFolder(
-        traindir,
-        transforms.Compose([
-            transforms.RandomResizedCrop(224),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            normalize,
-        ]))
-
-    train_loader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=args.batch_size, shuffle=True,
-        num_workers=args.workers, pin_memory=True, sampler=None)
-
-    val_dataset = datasets.ImageFolder(valdir, transforms.Compose([
-            transforms.Resize(256),
-            transforms.CenterCrop(224),
-            transforms.ToTensor(),
-            normalize,
-        ]))
-
-    val_loader = torch.utils.data.DataLoader(
-        val_dataset,
-        batch_size=args.batch_size, shuffle=False,
-        num_workers=args.workers, pin_memory=True)
-
-    if args.evaluate:
-        validate(val_loader, model, criterion, args)
-        return
-
-    def eval_func(model):
-        accu = validate(val_loader, model, criterion, args)
-        return float(accu)
-
     from neural_compressor.config import Torch2ONNXConfig
     if args.export and args.export_dtype == 'fp32':
+        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                         std=[0.229, 0.224, 0.225])
+
+        val_dataset = datasets.ImageFolder(args.data, transforms.Compose([
+                transforms.Resize(256),
+                transforms.CenterCrop(224),
+                transforms.ToTensor(),
+                normalize,
+            ]))
+
+        val_loader = torch.utils.data.DataLoader(
+            val_dataset,
+            batch_size=args.batch_size, shuffle=False,
+            num_workers=args.workers, pin_memory=True)
+
+        if args.evaluate:
+            validate(val_loader, model, criterion, args)
+            return
+
         from neural_compressor.model import Model
         inc_model = Model(model)
         fp32_onnx_config = Torch2ONNXConfig(
@@ -189,37 +370,100 @@ def main():
                             "output": {0: "batch_size"}},
         )
         inc_model.export(args.output_model, fp32_onnx_config)
+        model = onnx.load(args.output_model)
+        validate(val_loader, model, criterion, args)
+        exit(0)
 
     if args.export and args.export_dtype == 'int8':
-        from neural_compressor import PostTrainingQuantConfig
-        from neural_compressor import quantization
-        if 'efficient' in args.arch:
-            # To reduce tuning time and get the result faster, the efficient net series model
-            # use the MSE_V2 strategy by default.
-            from neural_compressor.config import TuningCriterion
-            tuning_criterion = TuningCriterion(strategy="mse_v2")
-            conf = PostTrainingQuantConfig(tuning_criterion=tuning_criterion)
-        else:
-            conf = PostTrainingQuantConfig()
-        q_model = quantization.fit(model,
-                                    conf,
-                                    calib_dataloader=val_loader,
-                                    eval_func=eval_func)
-        q_model.save(args.tuned_checkpoint)
-        int8_onnx_config = Torch2ONNXConfig(
-            dtype="int8",
-            opset_version=14,
-            quant_format="QDQ",
+        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                         std=[0.229, 0.224, 0.225])
+
+        val_dataset = datasets.ImageFolder(args.data, transforms.Compose([
+                transforms.Resize(256),
+                transforms.CenterCrop(224),
+                transforms.ToTensor(),
+                normalize,
+            ]))
+
+        val_loader = torch.utils.data.DataLoader(
+            val_dataset,
+            batch_size=args.batch_size, shuffle=False,
+            num_workers=args.workers, pin_memory=True)
+
+        from neural_compressor.model import Model
+        model.eval()
+        inc_model = Model(model)
+        fp32_onnx_config = Torch2ONNXConfig(
+            dtype="fp32",
             example_inputs=torch.randn(1, 3, 224, 224),
             input_names=['input'],
             output_names=['output'],
             dynamic_axes={"input": {0: "batch_size"},
                             "output": {0: "batch_size"}},
+            training_mode=1
         )
-        q_model.export(args.output_model, int8_onnx_config)
+        inc_model.export(args.output_model, fp32_onnx_config)
+        
+        from neural_compressor import PostTrainingQuantConfig
+        from neural_compressor import quantization
+        from neural_compressor.utils.create_obj_from_config import create_dataloader
+        from neural_compressor.metric import METRICS
+        torch.manual_seed(9527)
+        calib_dataloader_args = {
+            'batch_size': 30,
+            'dataset': { 'ImageFolder': {'root': args.data}},
+            'transform': {'RandomResizedCrop': {'size': 224},
+                          'RandomHorizontalFlip': {},
+                          'ToTensor': {},
+                          'Normalize': {'mean': [0.485, 0.456, 0.406], 'std': [0.229, 0.224, 0.225]},
+                          },
+            'shuffle': True,
+            'filter': None}
+        calib_dataloader = create_dataloader('pytorch', calib_dataloader_args)
+
+        dataloader_args = {
+            'batch_size': 30,
+            'dataset': { 'ImageFolder': {'root': args.data}},
+            'transform': {'Resize': {'size': 256},
+                          'CenterCrop': {'size': 224},
+                          'ToTensor': {},
+                          'Normalize': {'mean': [0.485, 0.456, 0.406], 'std': [0.229, 0.224, 0.225]},
+                          },
+            'shuffle': True,
+            'filter': None}
+        dataloader = create_dataloader('pytorch', dataloader_args)
+ 
+        metrics = METRICS('pytorch')
+        top1 = metrics['topk']()
+
+        conf = PostTrainingQuantConfig(calibration_sampling_size=[300],
+            precision='fp8_e5m2', approach='static', batchnorm_calibration_sampling_size=[4000])
+        q_model = quantization.fit(args.output_model,
+                                    conf,
+                                    calib_dataloader=calib_dataloader,
+                                    eval_dataloader=dataloader,
+                                    eval_metric=top1)
+ 
+        q_model.save(args.output_model)
         return
 
     if args.performance or args.accuracy:
+        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                         std=[0.229, 0.224, 0.225])
+
+        val_dataset = datasets.ImageFolder(args.data, transforms.Compose([
+                transforms.Resize(256),
+                transforms.CenterCrop(224),
+                transforms.ToTensor(),
+                normalize,
+            ]))
+
+        val_loader = torch.utils.data.DataLoader(
+            val_dataset,
+            batch_size=args.batch_size, shuffle=False,
+            num_workers=args.workers, pin_memory=True)
+
+
         model.eval()
         if args.int8:
             from neural_compressor.utils.pytorch import load
@@ -237,7 +481,7 @@ def main():
                                      num_of_instance=1)
             benchmark.fit(new_model, b_conf, b_dataloader=val_loader)
         if args.accuracy:
-            validate(val_loader, new_model, criterion, args)
+            validate2(val_loader, new_model, criterion, args)
         return
 
 
@@ -284,8 +528,7 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
         if i % args.print_freq == 0:
             progress.print(i)
 
-
-def validate(val_loader, model, criterion, args):
+def validate2(val_loader, model, criterion, args):
     batch_time = AverageMeter('Time', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
     top1 = AverageMeter('Acc@1', ':6.2f')
@@ -295,22 +538,66 @@ def validate(val_loader, model, criterion, args):
 
     # switch to evaluate mode
     model.eval()
-
     with torch.no_grad():
         for i, (input, target) in enumerate(val_loader):
             if i >= args.warmup_iter:
                 start = time.time()
+
             if args.gpu is not None:
                 input = input.cuda(args.gpu, non_blocking=True)
                 target = target.cuda(args.gpu, non_blocking=True)
 
             # compute output
             output = model(input)
-            loss = criterion(output, target)
 
             # measure accuracy and record loss
             acc1, acc5 = accuracy(output, target, topk=(1, 5))
-            losses.update(loss.item(), input.size(0))
+            top1.update(acc1[0], input.size(0))
+            top5.update(acc5[0], input.size(0))
+
+            # measure elapsed time
+            if i >= args.warmup_iter:
+                batch_time.update(time.time() - start)
+
+            if i % args.print_freq == 0:
+                progress.print(i)
+
+            if args.iter > 0 and i >= (args.warmup_iter + args.iter - 1):
+                break
+
+        print('Batch size = %d' % args.batch_size)
+        print('Accuracy: {top1:.5f} Accuracy@5 {top5:.5f}'
+              .format(top1=(top1.avg / 100), top5=(top5.avg / 100)))
+
+
+def validate(val_loader, model, criterion, args):
+    batch_time = AverageMeter('Time', ':6.3f')
+    losses = AverageMeter('Loss', ':.4e')
+    top1 = AverageMeter('Acc@1', ':6.2f')
+    top5 = AverageMeter('Acc@5', ':6.2f')
+    progress = ProgressMeter(len(val_loader), batch_time, losses, top1, top5,
+                             prefix='Test: ')
+
+    postprocess = Squeeze()
+    metric = TopK()
+ 
+    # switch to evaluate mode
+    sess_options = ort.SessionOptions()
+    sess_options.register_custom_ops_library(get_library_path())
+    session = ort.InferenceSession(model.SerializeToString(), sess_options)
+    inputs_names = [i.name for i in session.get_inputs()]
+    with torch.no_grad():
+        for i, (input, target) in enumerate(val_loader):
+            if i >= args.warmup_iter:
+                start = time.time()
+            output = session.run(None, {inputs_names[0]: input.detach().cpu().numpy()})
+
+            # compute output
+            output = torch.from_numpy(output[0])
+
+            # measure accuracy and record loss
+
+            acc1, acc5 = accuracy(output, target, topk=(1, 5))
             top1.update(acc1[0], input.size(0))
             top5.update(acc5[0], input.size(0))
 

@@ -232,21 +232,18 @@ class ONNXRTAugment:
 
         for idx, (inputs, labels) in enumerate(self.dataloader):
             ort_inputs = {}
-            if len_inputs == 1:
-                ort_inputs.update(
-                    inputs if isinstance(inputs, dict) else {inputs_names[0]: inputs}
-                )
+            if isinstance(inputs, dict):
+                ort_inputs.update(inputs)
+            elif len_inputs > 1:
+                for i in range(len_inputs):
+                    if not isinstance(inputs[i], np.ndarray):
+                        ort_inputs.update({inputs_names[i]: np.array(inputs[i])})
+                    else:
+                        ort_inputs.update({inputs_names[i]: inputs[i]})
             else:
-                assert len_inputs == len(inputs), \
-                    'number of input tensors must align with graph inputs'
-                if isinstance(inputs, dict):  # pragma: no cover
-                    ort_inputs.update(inputs)
-                else:
-                    for i in range(len_inputs):
-                        if not isinstance(inputs[i], np.ndarray): # pragma: no cover
-                            ort_inputs.update({inputs_names[i]: np.array(inputs[i])})
-                        else:
-                            ort_inputs.update({inputs_names[i]: inputs[i]})
+                ort_inputs.update({inputs_names[0]: inputs} if isinstance(inputs, np.ndarray) \
+                    else {inputs_names[0]: np.array(inputs)})
+ 
             if self.iterations != []:
                 if idx > max(self.iterations):
                     break
@@ -281,10 +278,6 @@ class ONNXRTAugment:
         session = onnxruntime.InferenceSession(
                     self.augmented_model.SerializeToString(),
                     so,
-                    provider=self.backend) if not self.model_wrapper.large_size else \
-                  onnxruntime.InferenceSession(
-                    self.model_wrapper.model_path  + '_augment.onnx',
-                    so,
                     provider=self.backend)
 
         intermediate_outputs = []
@@ -297,57 +290,74 @@ class ONNXRTAugment:
                              for output in session.get_outputs()]
 
         update_data = {}
+        output_to_init = {}
         wrapper = ONNXModel(self.augmented_model)
         for node in wrapper.nodes():
             if node.op_type == 'BatchNormalization':
                 momentum = [i.f for i in node.attribute if i.name == 'momentum'][0]
+                # mean, var , momentum
                 update_data[node.input[0]] = [torch.from_numpy(copy.deepcopy(numpy_helper.to_array(wrapper.get_initializer(node.input[3])))),
-                    torch.from_numpy(copy.deepcopy(numpy_helper.to_array(wrapper.get_initializer(node.input[4])))), momentum]
+                    torch.from_numpy(copy.deepcopy(numpy_helper.to_array(wrapper.get_initializer(node.input[4])))), momentum,
+                    wrapper.get_initializer(node.input[3]).name, wrapper.get_initializer(node.input[4]).name]
 
         for idx, (inputs, labels) in enumerate(self.dataloader):
             ort_inputs = {}
-            if len_inputs == 1:
-                ort_inputs.update(
-                    inputs if isinstance(inputs, dict) else {inputs_names[0]: inputs}
-                )
+            if isinstance(inputs, dict):
+                ort_inputs.update(inputs)
+            elif len_inputs > 1:
+                for i in range(len_inputs):
+                    if not isinstance(inputs[i], np.ndarray):
+                        ort_inputs.update({inputs_names[i]: np.array(inputs[i])})
+                    else:
+                        ort_inputs.update({inputs_names[i]: inputs[i]})
             else:
-                assert len_inputs == len(inputs), \
-                    'number of input tensors must align with graph inputs'
-                if isinstance(inputs, dict):  # pragma: no cover
-                    ort_inputs.update(inputs)
-                else:
-                    for i in range(len_inputs):
-                        if not isinstance(inputs[i], np.ndarray): # pragma: no cover
-                            ort_inputs.update({inputs_names[i]: np.array(inputs[i])})
-                        else:
-                            ort_inputs.update({inputs_names[i]: inputs[i]})
+                ort_inputs.update({inputs_names[0]: inputs} if isinstance(inputs, np.ndarray) \
+                    else {inputs_names[0]: np.array(inputs)})
+                    
             if self.iterations != []:
                 if idx > max(self.iterations):
                     break
                 if idx in self.iterations:
-                    for output_idx, output in enumerate(session.run(None, ort_inputs)): 
-                        if node_output_names[output_idx] in update_data:
-                            mean = update_data[node_output_names[output_idx]][0]
-                            var = update_data[node_output_names[output_idx]][1]
-                            momentum = update_data[node_output_names[output_idx]][2]
-
-                            update_data[node_output_names[output_idx]][0] = \
+                    outputs = session.run(None, ort_inputs)
+                    for output_idx, output in enumerate(outputs):
+                        if node_output_names[output_idx] not in wrapper.output_name_to_node and \
+                            node_output_names[output_idx] not in wrapper.input():
+                            continue
+                        tensor_name = node_output_names[output_idx]
+                        if tensor_name in update_data:
+                            mean = update_data[tensor_name][0]
+                            var = update_data[tensor_name][1]
+                            momentum = update_data[tensor_name][2]
+ 
+                            update_data[tensor_name][0] = \
                                 (1 - momentum) * torch.from_numpy(output).mean(dim=(0,2,3)) + momentum * mean
-                            update_data[node_output_names[output_idx]][1] = \
+                            update_data[tensor_name][1] = \
                                 (1 - momentum) * torch.from_numpy(output).var(dim=(0,2,3)) + momentum * var
+
+                            wrapper.set_initializer(update_data[tensor_name][3], update_data[tensor_name][0].cpu().detach().numpy())
+                            wrapper.set_initializer(update_data[tensor_name][4], update_data[tensor_name][1].cpu().detach().numpy())
  
             else:
                 for output_idx, output in enumerate(session.run(None, ort_inputs)): 
+ 
                     if node_output_names[output_idx] in update_data:
                         mean = update_data[node_output_names[output_idx]][0]
                         var = update_data[node_output_names[output_idx]][1]
                         momentum = update_data[node_output_names[output_idx]][2]
-
+ 
                         update_data[node_output_names[output_idx]][0] = \
                             (1 - momentum) * torch.from_numpy(output).mean(dim=(0,2,3)) + momentum * mean
                         update_data[node_output_names[output_idx]][1] = \
                             (1 - momentum) * torch.from_numpy(output).var(dim=(0,2,3)) + momentum * var
- 
+
+                        wrapper.set_initializer(update_data[node_output_names[output_idx]][3], update_data[node_output_names[output_idx]][0].cpu().detach().numpy())
+                        wrapper.set_initializer(update_data[node_output_names[output_idx]][4], update_data[node_output_names[output_idx]][1].cpu().detach().numpy())
+
+            session = onnxruntime.InferenceSession(
+                       wrapper.model.SerializeToString(),
+                       so,
+                       provider=self.backend)
+
         return update_data
 
     def _dequantize(self, tensor, scale_tensor, zo_tensor):
@@ -459,7 +469,7 @@ class ONNXRTAugment:
         return self._map_calibration(node_output_names, output_dicts,
                                      calib_mode=calib_mode)
 
-    def dump_calibration(self, q_config, calib_mode='naive'):
+    def dump_calibration(self, q_config, calib_mode='naive', minmax=None):
         '''
             Gather calibration params for quantization
             parameter calib_mode: type 'naive' gives (Min, Max) pairs
@@ -469,7 +479,8 @@ class ONNXRTAugment:
                                 second element is a maximum of all values;
             :return: dictionary mapping: {added node names: (ReduceMin, ReduceMax) pairs }
         '''
-        return self.calculate_quantization_params(q_config, self.dump_minmax(calib_mode))
+        return self.calculate_quantization_params(q_config, self.dump_minmax(calib_mode)) if minmax is None \
+            else self.calculate_quantization_params(q_config, minmax)
 
     def calculate_quantization_params(self, q_config, quantization_thresholds):
         '''

@@ -336,11 +336,26 @@ class ONNXModel(BaseModel):
                     ONNXModel.replace_node_output(node, old_output_name, new_output_name)
 
     def remove_unused_constant(self):
+        import copy
         unused_nodes = []
         nodes = self.nodes()
         for node in nodes:
-            if node.op_type == "Constant" and node.output[0] not in self._model.graph.output \
-                and node.output[0] not in self._input_name_to_nodes:
+            if node.op_type == "Constant" and node.output[0] not in self._model.graph.output:
+                if node.output[0] in self._input_name_to_nodes:
+                    tensor = node.attribute[0].t
+                    tensor.name = node.output[0]
+                    self.add_initializer(tensor)
+                unused_nodes.append(node)
+            elif node.op_type == "Identity" and node.output[0] not in self._model.graph.output:
+                if node.output[0] in self._input_name_to_nodes:
+                    tensor = self.get_initializer(node.input[0])
+                    if len(self._input_name_to_nodes[tensor.name]) > 1:
+                        new_tensor = copy.deepcopy(tensor)
+                        new_tensor.name = node.output[0]
+                        self.add_initializer(new_tensor)
+                    else:
+                        tensor.name = node.output[0]
+                        self.add_initializer(tensor)
                 unused_nodes.append(node)
             elif node.op_type == 'QuantizeLinear' and len(self.get_children(node)) == 1 and \
                 self.get_children(node)[0].op_type == 'DequantizeLinear' and \

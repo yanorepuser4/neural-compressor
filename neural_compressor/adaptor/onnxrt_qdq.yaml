@@ -351,9 +351,9 @@
         'LeakyRelu', 'Gather', 'Sigmoid', 'MaxPool', 'EmbedLayerNormalization',
         'FusedConv', 'GlobalAveragePool', 'Pad', 'Split', 'Squeeze', 'Reshape',
         'Concat', 'AveragePool', 'Unsqueeze', 'Transpose', 'Gemm', 'Resize']
-    fp8_e5m2: ['Conv', 'Gemm', 'MatMul', 'Add', 'Mul', 'Div']
-    fp8_e4m3: ['Conv', 'Gemm', 'MatMul', 'Add', 'Mul', 'Div']
-    fp8_e3m4: ['Conv', 'Gemm', 'MatMul', 'Add', 'Mul', 'Div']
+    fp8_e5m2: ['Conv', 'MatMul', 'Gemm']
+    fp8_e4m3: ['Conv', 'MatMul', 'Add', 'Gemm']
+    fp8_e3m4: ['Conv', 'MatMul', 'Add', 'Gemm']
     fp32: ['*'] # '*' means all op types
 
   capabilities:

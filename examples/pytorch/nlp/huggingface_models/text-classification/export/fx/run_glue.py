@@ -45,11 +45,23 @@ from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import check_min_version
 from transformers.utils.versions import require_version
 
+from cProfile import label
+
+import onnx
+import onnxruntime as ort
+import transformers
+import torch
+
+from onnxruntime_extensions import get_library_path, onnx_op, PyCustomOpDef
+from mpemu.pytquant.cpp import fpemu_cpp
+
+from neural_compressor.data.dataloaders.onnxrt_dataloader import DefaultDataLoader
+from neural_compressor.data.datasets.dummy_dataset import DummyDataset
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
-check_min_version("4.10.0")
+#check_min_version("4.10.0")
 
-require_version("datasets>=1.8.0", "To fix: pip install -r examples/pytorch/text-classification/requirements.txt")
+#require_version("datasets>=1.8.0", "To fix: pip install -r examples/pytorch/text-classification/requirements.txt")
 
 task_to_keys = {
     "cola": ("sentence", None),
@@ -64,6 +76,163 @@ task_to_keys = {
 }
 
 logger = logging.getLogger(__name__)
+
+
+@onnx_op(op_type="fp8_e5m2",
+         inputs=[PyCustomOpDef.dt_float])
+def FP8_converter_1(x):
+    input = torch.from_numpy(x)
+    size = input.nelement()
+    outputs = fpemu_cpp.fpemu_cpp.forward(input.contiguous(), 'E5M2_RNE', size, False, 1.0, False, 1)
+    output = outputs[0]
+    return output.cpu().detach().numpy()
+
+@onnx_op(op_type="fp8_e4m3",
+         inputs=[PyCustomOpDef.dt_float, PyCustomOpDef.dt_float])
+def FP8_converter_e4m3(x, y):
+    input = torch.from_numpy(x)
+    size = input.nelement()
+    outputs = fpemu_cpp.fpemu_cpp.forward(input.contiguous(), 'E4M3_RNE', size, False, y, False, 1)
+    output = outputs[0]
+    return output.cpu().detach().numpy()
+
+@onnx_op(op_type="fp8_e3m4",
+         inputs=[PyCustomOpDef.dt_float, PyCustomOpDef.dt_float])
+def FP8_converter_e4m3(x, y):
+    input = torch.from_numpy(x)
+    size = input.nelement()
+    outputs = fpemu_cpp.fpemu_cpp.forward(input.contiguous(), 'E3M4_RNE', size, False, y, False, 1)
+    output = outputs[0]
+    return output.cpu().detach().numpy()
+
+class ONNXRTBertDataset:
+    def __init__(self, task, model_name_or_path, max_seq_length=128, data_dir=None):
+        raw_dataset = load_dataset('glue', task, cache_dir=data_dir, split='validation')
+        tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
+        sentence1_key, sentence2_key = task_to_keys[task]
+        origin_keys = raw_dataset[0].keys()
+
+        def preprocess_function(examples):
+            # Tokenize the texts
+            args = (
+                (examples[sentence1_key],) if sentence2_key is None else (examples[sentence1_key], examples[sentence2_key])
+            )
+            result = tokenizer(*args, padding="max_length", max_length=max_seq_length, truncation=True)
+            if  "label" in examples:
+                result["label"] = examples["label"]
+            return result
+
+        self.dataset = raw_dataset.map(
+            preprocess_function, batched=True, load_from_cache_file=True, remove_columns=origin_keys
+        )
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, index):
+        batch = {k: np.asarray(v) for k, v in self.dataset[index].items()}
+        label = batch.pop('label')
+        return batch, label
+
+
+class INCDataloader():
+    def __init__(self, dataset, batch_size=1):
+        import math
+        self.dataset = dataset
+        self.batch_size = batch_size
+        self.length = math.ceil(len(self.dataset) // self.batch_size)
+        self.example_input = self.dataset[0][0]
+
+    def __iter__(self):
+        batched_input = {k: None for k in self.example_input}
+        batched_label = None
+        for idx, (input, label) in enumerate(self.dataset):
+            label = np.expand_dims(label, axis=0)
+            for k, v in input.items():
+                v = np.expand_dims(v, axis=0)
+                if batched_input[k] is None:
+                    batched_input[k] = v
+                else:
+                    batched_input[k] = np.append(batched_input[k], v, axis=0)
+            if batched_label is None:
+                batched_label = label
+            else:
+                batched_label = np.append(batched_label, label, axis=0)
+            if (idx+1) % self.batch_size == 0:
+                yield batched_input, batched_label
+                batched_input = {k: None for k in self.example_input}
+                batched_label = None
+        if (idx+1) % self.batch_size != 0:
+            yield batched_input, batched_label
+
+    def __len__(self):
+        return self.length
+
+class ONNXRTGLUE:
+    """Computes GLUE score.
+
+    Args:
+        task (str, default=mrpc): The name of the task.
+                                  Choices include mrpc, qqp, qnli, rte,
+                                  sts-b, cola, mnli, wnli.
+
+    """
+    def __init__(self, task='mrpc'):
+        assert task in ['mrpc', 'qqp', 'qnli', 'rte', 'stsb', 'cola', \
+            'mnli', 'wnli', 'sst2'], 'Unsupported task type'
+        self.pred_list = None
+        self.label_list = None
+        self.task = task
+        self.return_key = {
+            "cola": "mcc",
+            "mrpc": "f1",
+            "stsb": "corr",
+            "qqp": "acc",
+            "mnli": "mnli/acc",
+            "qnli": "acc",
+            "rte": "acc",
+            "wnli": "acc",
+            "sst2": "acc"
+        }
+        self.remap = {
+            "cola": "cola",
+            "mrpc": "mrpc",
+            "stsb": "sts-b",
+            "qqp": "qqp",
+            "mnli": "mnli",
+            "qnli": "qnli",
+            "rte": "rte",
+            "wnli": "wnli",
+            "sst2": "sst-2"
+        }
+
+    def update(self, preds, labels):
+        if self.pred_list is None:
+            self.pred_list = preds
+            self.label_list = labels
+        else:
+            self.pred_list = np.append(self.pred_list, preds, axis=0)
+            self.label_list = np.append(self.label_list, labels, axis=0)
+
+    def reset(self):
+        """clear preds and labels storage"""
+        self.pred_list = None
+        self.label_list = None
+
+    def result(self):
+        """calculate metric"""
+        output_mode = transformers.glue_output_modes[self.task]
+
+        if output_mode == "classification":
+            processed_preds = np.argmax(self.pred_list, axis=1)
+        elif output_mode == "regression":
+            processed_preds = np.squeeze(self.pred_list)
+        result = transformers.glue_compute_metrics(\
+            self.task, processed_preds, self.label_list)
+        for k, v in self.return_key.items():
+            if k in result:
+              print(k, result[k])
+        return result[self.return_key[self.remap[self.task]]]
 
 
 @dataclass
@@ -508,8 +677,28 @@ def main():
                 return metrics[key]
         assert False, "No metric returned, Please check inference metric!"
 
-    def eval_func(model):
+    def eval_func2(model):
         return take_eval_steps(model, trainer)
+
+
+    dataset = ONNXRTBertDataset(task=data_args.task_name,
+                                model_name_or_path=model_args.model_name_or_path,
+                                max_seq_length=max_seq_length)
+    dataloader = INCDataloader(dataset, batch_size)
+    metric2 = ONNXRTGLUE(data_args.task_name)
+
+    def eval_func(model):
+        metric2.reset()
+        sess_options = ort.SessionOptions()
+        sess_options.register_custom_ops_library(get_library_path())
+        
+        from tqdm import tqdm
+        session = ort.InferenceSession(model.SerializeToString(), sess_options)
+        for inputs, labels in tqdm(dataloader):
+            predictions = session.run(None, inputs)
+            metric2.update(predictions[0], labels)
+        return metric2.result()
+
 
     from neural_compressor.config import Torch2ONNXConfig
     it = iter(eval_dataloader)
@@ -517,10 +706,9 @@ def main():
     input.pop('labels')
     symbolic_names = {0: 'batch_size', 1: 'max_seq_len'}
     dynamic_axes = {k: symbolic_names for k in input.keys()}
-
+    from neural_compressor.model import Model
     if model_args.export and model_args.export_dtype == 'fp32':
-        from neural_compressor.model import Model
-        inc_model = Model(model)
+
         fp32_onnx_config = Torch2ONNXConfig(
             dtype=model_args.export_dtype,
             opset_version=14,
@@ -529,49 +717,31 @@ def main():
             output_names=['labels'],
             dynamic_axes=dynamic_axes,
         )
-        inc_model.export(model_args.output_model, fp32_onnx_config)
+        q_model.export(model_args.output_model, fp32_onnx_config)
 
     # optimize and quantize with Neural Compressor
     if model_args.export_dtype == 'int8':
-        from neural_compressor.quantization import fit
-        from neural_compressor.config import PostTrainingQuantConfig, TuningCriterion
-        tuning_criterion = TuningCriterion(
-            strategy="mse_v2",
-            strategy_kwargs={"confidence_batches": 1},
-            max_trials=600,
-        )
-        conf = PostTrainingQuantConfig(
-            approach="static", 
-            tuning_criterion=tuning_criterion,
-            calibration_sampling_size=[300],
-        )
-        q_model = fit(model, conf=conf, calib_dataloader=eval_dataloader, eval_func=eval_func)
-        from neural_compressor.utils.load_huggingface import save_for_huggingface_upstream
-        save_for_huggingface_upstream(q_model, tokenizer, training_args.output_dir)
-
-        int8_onnx_config = Torch2ONNXConfig(
-            dtype=model_args.export_dtype,
+        from neural_compressor.model import Model
+        inc_model = Model(model)
+        fp32_onnx_config = Torch2ONNXConfig(
+            dtype='fp32',
             opset_version=14,
-            quant_format=model_args.quant_format,
             example_inputs=tuple(input.values()),
             input_names=list(input.keys()),
             output_names=['labels'],
             dynamic_axes=dynamic_axes,
         )
-        q_model.export(model_args.output_model, int8_onnx_config)
-        return
+        inc_model.export(model_args.output_model, fp32_onnx_config)
 
-    if model_args.benchmark:
-        from neural_compressor.config import BenchmarkConfig
-        from neural_compressor import benchmark
-        b_conf = BenchmarkConfig(warmup=5,
-                                iteration=model_args.iters,
-                                cores_per_instance=4,
-                                num_of_instance=1)
-        benchmark.fit(model, b_conf, b_dataloader=eval_dataloader)
-    elif model_args.accuracy:
-        eval_func(model)
-
+        from neural_compressor.quantization import fit
+        from neural_compressor.config import PostTrainingQuantConfig, TuningCriterion
+        conf = PostTrainingQuantConfig(
+            approach="static", 
+            precision="fp8_e3m4"
+            calibration_sampling_size=[300],
+        )
+        q_model = fit(model_args.output_model, conf=conf, calib_dataloader=dataloader, eval_func=eval_func)
+        q_model.save(model_args.output_model)
 
     if training_args.push_to_hub:
         kwargs = {"finetuned_from": model_args.model_name_or_path, "tasks": "text-classification"}

@@ -684,6 +684,7 @@ class PyTorchModel(PyTorchBaseModel):
                 output_names=conf.output_names,
                 do_constant_folding=True,
                 verbose=True,
+                training_mode=conf.training_mode
             )
         else:   # pragma: no cover
             assert False, "Not allowed dtype: {}, pleas use 'fp32' or 'int8'.".format(conf.dtype)

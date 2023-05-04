@@ -461,10 +461,9 @@
         'FusedConv', 'GlobalAveragePool', 'Pad', 'Split', 'Add', 'Squeeze',
         'Reshape', 'Concat', 'AveragePool', 'Unsqueeze', 'Transpose', 'ArgMax',
         'Gemm', 'Resize']
-    #fp8_e5m2: ['Conv', 'Gemm', 'MatMul', 'Add', 'Mul', 'Div']
-    fp8_e5m2: ['MatMul', 'Add']
-    fp8_e4m3: ['Conv', 'Gemm', 'MatMul', 'Add', 'Mul', 'Div']
-    fp8_e3m4: ['Conv', 'Gemm', 'MatMul', 'Add', 'Mul', 'Div']
+    fp8_e5m2: ['MatMul', 'Conv', 'Gemm']
+    fp8_e4m3: ['MatMul', 'Conv', 'Gemm']
+    fp8_e3m4: ['MatMul', 'Conv', 'Add', 'Gemm']
     fp32: ['*'] # '*' means all op types
 
   capabilities:

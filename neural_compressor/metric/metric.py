@@ -137,6 +137,7 @@ framework_metrics = {"tensorflow": TensorflowMetrics,
                      "pytorch": PyTorchMetrics,
                      "pytorch_ipex": PyTorchMetrics,
                      "pytorch_fx": PyTorchMetrics,
+                     "onnxruntime": ONNXRTQLMetrics,
                      "onnxrt_qlinearops": ONNXRTQLMetrics,
                      "onnxrt_integerops": ONNXRTITMetrics,
                      "onnxrt_qdq": ONNXRTQLMetrics,
@@ -161,6 +162,7 @@ registry_metrics = {"tensorflow": TENSORFLOW_METRICS,
                     "onnxrt_qdq": ONNXRT_QL_METRICS,
                     "onnxrt_integerops": ONNXRT_IT_METRICS,
                     "onnxrt_qoperator": ONNXRT_QL_METRICS,
+                    "onnxruntime": ONNXRT_QL_METRICS,
                     }
 
 
@@ -177,7 +179,7 @@ class METRICS(object):
         Args:
             framework: The framwork name.
         """
-        assert framework in ("tensorflow", "tensorflow_itex",
+        assert framework in ("tensorflow", "tensorflow_itex", "onnxruntime",
                             "pytorch", "pytorch_ipex", "pytorch_fx", "onnxrt_qdq",
                              "onnxrt_qlinearops", "onnxrt_integerops", "mxnet",
                              "onnxrt_qoperator"), \
