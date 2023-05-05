@@ -122,7 +122,7 @@ def main(_):
         config = MixedPrecisionConfig(backend='itex')
 
         bf16_model = mix_precision.fit(
-            model=FLAGS.input_model
+            model=FLAGS.input_model,
             config=config,
             eval_func=evaluate)
         bf16_model.save(FLAGS.output_model)

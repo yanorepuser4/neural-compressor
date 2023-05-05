@@ -76,6 +76,83 @@
       "input_model": "/tf_dataset2/models/tensorflow/mobilenet_v2_keras/saved_model",
       "main_script": "main.py",
       "batch_size": 32
+    },
+    "resnetv2_50_mix_precision": {
+      "model_src_dir": "image_recognition/resnetv2_50/mix-precision",
+      "dataset_location": "/tf_dataset/dataset/imagenet",
+      "input_model": "/tf_dataset2/models/tensorflow/resnetv2_50_keras/saved_model",
+      "main_script": "main.py",
+      "batch_size": 32
+    },
+    "resnet50_fashion_mix_precision": {
+      "model_src_dir": "image_recognition/resnet50_fashion/mix-precision",
+      "dataset_location": "./data_dir",
+      "input_model": "/tf_dataset2/models/tensorflow/resnet50_fashion",
+      "main_script": "main.py",
+      "batch_size": 32
+    },
+    "vgg16_mix_precision": {
+      "model_src_dir": "image_recognition/vgg16/mix-precision",
+      "dataset_location": "/tf_dataset/dataset/imagenet",
+      "input_model": "/tf_dataset2/models/tensorflow/vgg16_keras/vgg16",
+      "main_script": "main.py",
+      "batch_size": 32
+    },
+    "vgg19_mix_precision": {
+      "model_src_dir": "image_recognition/vgg19/mix-precision",
+      "dataset_location": "/tf_dataset/dataset/imagenet",
+      "input_model": "/tf_dataset2/models/tensorflow/vgg19_keras/vgg19",
+      "main_script": "main.py",
+      "batch_size": 32
+    },
+    "inception_v3_mix_precision": {
+      "model_src_dir": "image_recognition/inception_v3/mix-precision",
+      "dataset_location": "/tf_dataset/dataset/imagenet",
+      "input_model": "/tf_dataset2/models/tensorflow/inception_v3_keras/saved_model",
+      "main_script": "main.py",
+      "batch_size": 32
+    },
+    "inception_resnet_v2_mix_precision": {
+      "model_src_dir": "image_recognition/inception_resnet_v2/mix-precision",
+      "dataset_location": "/tf_dataset/dataset/imagenet",
+      "input_model": "/tf_dataset2/models/tensorflow/inception_resnet_v2_keras/saved_model",
+      "main_script": "main.py",
+      "batch_size": 32
+    },
+    "resnet101_mix_precision": {
+      "model_src_dir": "image_recognition/resnet101/mix-precision",
+      "dataset_location": "/tf_dataset/dataset/imagenet",
+      "input_model": "/tf_dataset2/models/tensorflow/resnet101_keras/saved_model",
+      "main_script": "main.py",
+      "batch_size": 32
+    },
+    "resnet50_mix_precision": {
+      "model_src_dir": "image_recognition/resnetv2_50/mix-precision",
+      "dataset_location": "/tf_dataset/dataset/imagenet",
+      "input_model": "/tf_dataset2/models/tensorflow/resnetv2_50_keras/saved_model",
+      "main_script": "main.py",
+      "batch_size": 32
+    },
+    "xception_mix_precision": {
+      "model_src_dir": "image_recognition/xception/mix-precision",
+      "dataset_location": "/tf_dataset/dataset/imagenet",
+      "input_model": "/tf_dataset2/models/tensorflow/xception_keras/saved_model",
+      "main_script": "main.py",
+      "batch_size": 32
+    },
+    "resnetv2_101_mix_precision": {
+      "model_src_dir": "image_recognition/resnetv2_101/mix-precision",
+      "dataset_location": "/tf_dataset/dataset/imagenet",
+      "input_model": "/tf_dataset2/models/tensorflow/resnetv2_101_keras/saved_model",
+      "main_script": "main.py",
+      "batch_size": 32
+    },
+    "mobilenet_v2_mix_precision": {
+      "model_src_dir": "image_recognition/mobilenet_v2/mix-precision",
+      "dataset_location": "/tf_dataset/dataset/imagenet",
+      "input_model": "/tf_dataset2/models/tensorflow/mobilenet_v2_keras/saved_model",
+      "main_script": "main.py",
+      "batch_size": 32
     }
   }
 }
