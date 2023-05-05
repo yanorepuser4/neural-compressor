@@ -17,9 +17,9 @@
 #
 
 import argparse
-import tensorflow as tf
-def get_inception_resnet_v2_model(saved_path):
-    model = tf.keras.applications.InceptionResNetV2(weights='imagenet')
+from tensorflow.keras.applications.vgg16 import VGG16
+def get_vgg16_model(saved_path):
+    model = VGG16(weights='imagenet')
     model.save(saved_path)
 
 if __name__ == "__main__":
@@ -32,4 +32,4 @@ if __name__ == "__main__":
         help='path to exported model file')
 
     args = parser.parse_args()
-    get_inception_resnet_v2_model(args.output_model)
+    get_vgg16_model(args.output_model)

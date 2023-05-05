@@ -52,29 +52,28 @@ flags.DEFINE_integer(
     'iters', 100, 'maximum iteration when evaluating performance')
 
 from neural_compressor import Metric
-from neural_compressor.data.transforms.transform import ComposeTransform
-from neural_compressor.data.datasets.dataset import TensorflowImageRecord
-from neural_compressor.data.transforms.imagenet_transform import LabelShift
+from neural_compressor.data import TensorflowImageRecord
 from neural_compressor.data.dataloaders.tensorflow_dataloader import TensorflowDataLoader
-from neural_compressor.data.transforms.imagenet_transform import BilinearImagenetTransform
+from neural_compressor.data import ComposeTransform
+from neural_compressor.data import LabelShift
+from neural_compressor.data import TensorflowResizeCropImagenetTransform
 
-height = width = 299
 eval_dataset = TensorflowImageRecord(root=FLAGS.eval_data, transform=ComposeTransform(transform_list= \
-                 [BilinearImagenetTransform(height=height, width=width)]))
-
-eval_dataloader = TensorflowDataLoader(dataset=eval_dataset, batch_size=FLAGS.batch_size)
-
+            [TensorflowResizeCropImagenetTransform(height=224, width=224, mean_value=[123.68, 116.78, 103.94])]))
+if FLAGS.benchmark and FLAGS.mode == 'performance':
+    eval_dataloader = TensorflowDataLoader(dataset=eval_dataset, batch_size=1)
+else:
+    eval_dataloader = TensorflowDataLoader(dataset=eval_dataset, batch_size=FLAGS.batch_size)
 if FLAGS.calib_data:
-    calib_dataset = TensorflowImageRecord(root=FLAGS.calib_data, transform= \
-        ComposeTransform(transform_list= [BilinearImagenetTransform(height=height, width=width)]))
+    calib_dataset = TensorflowImageRecord(root=FLAGS.calib_data, transform=ComposeTransform(transform_list= \
+            [TensorflowResizeCropImagenetTransform(height=224, width=224, mean_value=[123.68, 116.78, 103.94])]))
     calib_dataloader = TensorflowDataLoader(dataset=calib_dataset, batch_size=10)
 
 def evaluate(model):
-    """
-    Custom evaluate function to inference the model for specified metric on validation dataset.
+    """Custom evaluate function to inference the model for specified metric on validation dataset.
 
     Args:
-        model (tf.keras.Model): The input model will be the class of tf.keras.Model.
+        model (tf.saved_model.load): The input model will be the class of tf.saved_model.load(quantized_model_path).
 
     Returns:
         accuracy (float): evaluation result, the larger is better.
@@ -83,34 +82,30 @@ def evaluate(model):
     from neural_compressor import METRICS
     metrics = METRICS('tensorflow')
     metric = metrics['topk']()
-    latency_list = []
 
     def eval_func(dataloader, metric):
         warmup = 5
         iteration = None
+        latency_list = []
         if FLAGS.benchmark and FLAGS.mode == 'performance':
             iteration = FLAGS.iters
         for idx, (inputs, labels) in enumerate(dataloader):
             start = time.time()
             predictions = model.predict_on_batch(inputs)
             end = time.time()
-            latency_list.append(end - start)
             predictions, labels = postprocess((predictions, labels))
             metric.update(predictions, labels)
+            latency_list.append(end - start)
             if iteration and idx >= iteration:
                 break
         latency = np.array(latency_list[warmup:]).mean() / eval_dataloader.batch_size
         return latency
 
     latency = eval_func(eval_dataloader, metric)
-    if FLAGS.benchmark:
-        logger.info("\n{} mode benchmark result:".format(FLAGS.mode))
-        for i, res in enumerate(latency_list):
-            logger.debug("Iteration {} result {}:".format(i, res))
     if FLAGS.benchmark and FLAGS.mode == 'performance':
-        logger.info("Batch size = {}".format(eval_dataloader.batch_size))
-        logger.info("Latency: {:.3f} ms".format(latency * 1000))
-        logger.info("Throughput: {:.3f} images/sec".format(1. / latency))
+        print("Batch size = {}".format(eval_dataloader.batch_size))
+        print("Latency: {:.3f} ms".format(latency * 1000))
+        print("Throughput: {:.3f} images/sec".format(1. / latency))
     acc = metric.result()
     return acc
 
