@@ -48,7 +48,7 @@ function run_tuning {
         TASK_NAME='cola'
     elif [ "${topology}" = "bert_base_STS-B" ]; then
         TASK_NAME='stsb'
-    elif [ "${topology}" = "bert_base_SST-2" ]; then
+    elif [ "${topology}" = "bert_base_SST-2" ] || [[ "${topology}" = *"sst2"* ]] || [[ "${topology}" = *"sst-2"* ]]; then
         TASK_NAME='sst2'
     elif [ "${topology}" = "bert_base_RTE" ]; then
         TASK_NAME='rte'
