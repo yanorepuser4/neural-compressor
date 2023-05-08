@@ -37,8 +37,9 @@ from neural_compressor.utils.utility import CpuInfo
 import math
 import sys
 from mpemu.pytquant.cpp import fpemu_cpp
-from onnxruntime_extensions import onnx_op, PyCustomOpDef, make_onnx_model
-from onnx import helper, numpy_helper, onnx_pb as onnx_proto
+
+onnx = LazyImport("onnx")
+ort = LazyImport("onnxruntime")
 
 def get_fp8_scale(tensor, qtconfig):
     amax = torch.max(torch.abs(tensor))
@@ -1189,6 +1190,7 @@ class ONNXRT_FP8Adaptor(ONNXRUNTIMEAdaptor):
         return {'optypewise': optype_wise, 'opwise': op_wise}
 
     def _fp8_quantize(self, model, op_config, params=None):
+        from onnx import helper, onnx_pb as onnx_proto
         add_nodes = []
         add_inits = model.graph.initializer
         fp8_nodes = []
@@ -1278,6 +1280,7 @@ class ONNXRT_FP8Adaptor(ONNXRUNTIMEAdaptor):
                     fp8_nodes.append(node.name)
             add_nodes.append(node)
         graph = helper.make_graph(add_nodes, 'fp8_model', model.graph.input, model.graph.output, add_inits)
+        from onnxruntime_extensions import make_onnx_model
         new_model = make_onnx_model(graph, opset_version=model.opset_import[0].version)
 
         return new_model
