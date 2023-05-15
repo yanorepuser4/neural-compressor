@@ -96,7 +96,7 @@ best_acc1 = 0
 def main():
     args = parser.parse_args()
     
-    if 'mobilenet' in args.arch:
+    if 'mobilenet_v2' in args.arch:
         import torchvision.models.quantization as models
     else:
         import torchvision.models as models
