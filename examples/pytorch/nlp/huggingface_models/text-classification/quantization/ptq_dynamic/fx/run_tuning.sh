@@ -44,6 +44,8 @@ function run_tuning {
     
     if  [[ "${topology}" = "bert_large_RTE"* ]]; then
         TASK_NAME='rte'
+    elif [[ "${topology}" = *"sst2"* ]] || [[ "${topology}" = *"sst-2"* ]]; then
+        TASK_NAME='sst2'
     fi
 
     python -u ./run_glue.py \
