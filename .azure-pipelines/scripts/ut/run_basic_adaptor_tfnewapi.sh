@@ -4,6 +4,7 @@ echo "run basic adaptor tfnewapi"
 
 echo "specify fwk version..."
 export tensorflow_version='spr-base'
+export COVERAGE_RCFILE=/neural-compressor/.azure-pipelines/scripts/ut/coverage.file
 # export FORCE_BF16=1
 
 echo "set up UT env..."
@@ -23,7 +24,7 @@ bash run.sh 2>&1 | tee -a ${ut_log_name}
 cp .coverage ${LOG_DIR}/.coverage.tfnewapi
 echo "------UT end -------"
 
-if [ $(grep -c "FAILED" ${ut_log_name}) != 0 ] || [ $(grep -c "OK" ${ut_log_name}) == 0 ];then
+if [ $(grep -c "FAILED" ${ut_log_name}) != 0 ] || [ $(grep -c "core dumped" ${ut_log_name}) != 0 ] || [ $(grep -c "OK" ${ut_log_name}) == 0 ];then
     echo "Find errors in UT test, please check the output..."
     exit 1
 fi
