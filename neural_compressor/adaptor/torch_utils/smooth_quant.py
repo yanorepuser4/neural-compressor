@@ -433,8 +433,8 @@ class TorchSmoothQuant:
                                                     )
             elif isinstance(layer, torch.nn.LayerNorm):
                 if layer.elementwise_affine:
-                    layer.weight *= scale
-                    layer.bias *= scale
+                    layer.weight = torch.nn.Parameter(layer.weight * scale)
+                    layer.bias = torch.nn.Parameter(layer.bias * scale)
                 else:
                     layer.elementwise_affine = True
                     weight = torch.ones(layer.num_features, device=self.device, dtype=self.dtype) * scale
@@ -784,7 +784,8 @@ class GraphTrace:
         self.skip_ops_to_find_absorb = ["aten::to",
                                         "aten::relu",
                                         "aten::leaky_relu",
-                                        "aten::hardtanh"
+                                        "aten::hardtanh",
+                                        "aten::alias"
                                         ]
 
         self.could_absorb_layers = ["aten::layer_norm", "aten::batch_norm", "aten::linear", "aten::_convolution",
@@ -795,9 +796,10 @@ class GraphTrace:
     def trace(self, model, dummy_input):
         traced_model = None
         optimize_numerics = False
-        if isinstance(dummy_input, dict):
+        if isinstance(dummy_input, dict) or isinstance(dummy_input, UserDict):
             try:
-                traced_model = torch.jit.trace(model, dummy_input["input_ids"], strict=False)
+                #traced_model = torch.jit.trace(model, dummy_input["input_ids"], strict=False)
+                traced_model = torch.jit.trace(model, example_kwarg_inputs=dict(dummy_input), strict=False)
                 traced_model = torch.jit.freeze(traced_model.eval(), optimize_numerics=optimize_numerics)
             except:
                 pass
