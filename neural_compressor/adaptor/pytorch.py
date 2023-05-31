@@ -2516,7 +2516,7 @@ class PyTorch_IPEXAdaptor(TemplateAdaptor):
         iterations = tune_cfg.get('calib_iteration', 1)
         model.model.eval()
         
-        del model._fqn_to_auto_quant_state_map
+        #del model._fqn_to_auto_quant_state_map
         #model.model.__class__
 
         if self.performance_only:
