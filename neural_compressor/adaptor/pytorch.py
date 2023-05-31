@@ -2515,6 +2515,9 @@ class PyTorch_IPEXAdaptor(TemplateAdaptor):
         qscheme = self._cfg_to_qconfig(tune_cfg)
         iterations = tune_cfg.get('calib_iteration', 1)
         model.model.eval()
+        
+        del model._fqn_to_auto_quant_state_map
+        #model.model.__class__
 
         if self.performance_only:
             if hasattr(model.model, "save_qconf_summary"):
@@ -2526,6 +2529,7 @@ class PyTorch_IPEXAdaptor(TemplateAdaptor):
                     self.model_calibration(q_model, dataloader, iterations, None,
                                            tune_cfg.get('calib_sampling_size', 1))
                 q_model.save_qconf_summary(qconf_summary=self.ipex_config_path)
+
                 if self.use_bf16 and (CpuInfo().bf16 or os.getenv('FORCE_BF16') == '1') and \
                     (self.version.release >= Version("1.11.0").release):
                     with torch.no_grad():
