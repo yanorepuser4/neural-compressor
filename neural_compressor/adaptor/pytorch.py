@@ -2536,10 +2536,16 @@ class PyTorch_IPEXAdaptor(TemplateAdaptor):
                         with torch.cpu.amp.autocast():
                             q_model = ipex.quantization.convert(q_model, inplace=True)
                             try:
-                                q_model = torch.jit.trace(q_model, self.example_inputs)
+                                if isinstance(self.example_inputs, dict) or isinstance(self.example_inputs, UserDict):
+                                    q_model = torch.jit.trace(q_model, example_kwarg_inputs=dict(self.example_inputs))  
+                                else:  
+                                    q_model = torch.jit.trace(q_model, self.example_inputs)
                                 q_model = torch.jit.freeze(q_model.eval())
                             except:
-                                q_model = torch.jit.trace(q_model, self.example_inputs, strict=False)
+                                if isinstance(self.example_inputs, dict) or isinstance(self.example_inputs, UserDict):
+                                    q_model = torch.jit.trace(q_model, example_kwarg_inputs=dict(self.example_inputs), strict=False)
+                                else:    
+                                    q_model = torch.jit.trace(q_model, self.example_inputs, strict=False)
                                 q_model = torch.jit.freeze(q_model.eval())
                 else:
                     q_model = ipex.quantization.convert(q_model, inplace=True)
@@ -2601,19 +2607,31 @@ class PyTorch_IPEXAdaptor(TemplateAdaptor):
                                 with torch.cpu.amp.autocast():
                                     q_model = ipex.quantization.convert(q_model, inplace=True)
                                     try:
-                                        q_model = torch.jit.trace(q_model, self.example_inputs)
+                                        if isinstance(self.example_inputs, dict) or isinstance(self.example_inputs, UserDict):
+                                            q_model = torch.jit.trace(q_model, example_kwarg_inputs=dict(self.example_inputs))  
+                                        else:  
+                                            q_model = torch.jit.trace(q_model, self.example_inputs)
                                         q_model = torch.jit.freeze(q_model.eval())
                                     except:
-                                        q_model = torch.jit.trace(q_model, self.example_inputs, strict=False)
+                                        if isinstance(self.example_inputs, dict) or isinstance(self.example_inputs, UserDict):
+                                            q_model = torch.jit.trace(q_model, example_kwarg_inputs=dict(self.example_inputs), strict=False)
+                                        else:    
+                                            q_model = torch.jit.trace(q_model, self.example_inputs, strict=False)
                                         q_model = torch.jit.freeze(q_model.eval())
                         else:
                             q_model = ipex.quantization.convert(q_model, inplace=True)
                             with torch.no_grad():
                                 try:
-                                    q_model = torch.jit.trace(q_model, self.example_inputs)
+                                    if isinstance(self.example_inputs, dict) or isinstance(self.example_inputs, UserDict):
+                                        q_model = torch.jit.trace(q_model, example_kwarg_inputs=dict(self.example_inputs))  
+                                    else:  
+                                        q_model = torch.jit.trace(q_model, self.example_inputs)
                                     q_model = torch.jit.freeze(q_model.eval())
                                 except:
-                                    q_model = torch.jit.trace(q_model, self.example_inputs, strict=False)
+                                    if isinstance(self.example_inputs, dict) or isinstance(self.example_inputs, UserDict):
+                                        q_model = torch.jit.trace(q_model, example_kwarg_inputs=dict(self.example_inputs), strict=False)
+                                    else:    
+                                        q_model = torch.jit.trace(q_model, self.example_inputs, strict=False)
                                     q_model = torch.jit.freeze(q_model.eval())
                         # After freezing, run 1 time to warm up the profiling graph executor to insert prim::profile
                         # At the 2nd run, the llga pass will be triggered and the model is turned into
@@ -2656,19 +2674,31 @@ class PyTorch_IPEXAdaptor(TemplateAdaptor):
                         with torch.cpu.amp.autocast():
                             q_model = ipex.quantization.convert(q_model, inplace=False)
                             try:
-                                q_model = torch.jit.trace(q_model, self.example_inputs)
+                                if isinstance(self.example_inputs, dict) or isinstance(self.example_inputs, UserDict):
+                                    q_model = torch.jit.trace(q_model, example_kwarg_inputs=dict(self.example_inputs))  
+                                else:  
+                                    q_model = torch.jit.trace(q_model, self.example_inputs)
                                 q_model = torch.jit.freeze(q_model.eval())
                             except:
-                                q_model = torch.jit.trace(q_model, self.example_inputs, strict=False)
+                                if isinstance(self.example_inputs, dict) or isinstance(self.example_inputs, UserDict):
+                                    q_model = torch.jit.trace(q_model, example_kwarg_inputs=dict(self.example_inputs), strict=False)
+                                else:    
+                                    q_model = torch.jit.trace(q_model, self.example_inputs, strict=False)
                                 q_model = torch.jit.freeze(q_model.eval())
                 else:
                     q_model = ipex.quantization.convert(q_model, inplace=False)
                     with torch.no_grad():
                         try:
-                            q_model = torch.jit.trace(q_model, self.example_inputs)
+                            if isinstance(self.example_inputs, dict) or isinstance(self.example_inputs, UserDict):
+                                q_model = torch.jit.trace(q_model, example_kwarg_inputs=dict(self.example_inputs))  
+                            else:  
+                                q_model = torch.jit.trace(q_model, self.example_inputs)
                             q_model = torch.jit.freeze(q_model.eval())
                         except:
-                            q_model = torch.jit.trace(q_model, self.example_inputs, strict=False)
+                            if isinstance(self.example_inputs, dict) or isinstance(self.example_inputs, UserDict):
+                                q_model = torch.jit.trace(q_model, example_kwarg_inputs=dict(self.example_inputs), strict=False)
+                            else:    
+                                q_model = torch.jit.trace(q_model, self.example_inputs, strict=False)
                             q_model = torch.jit.freeze(q_model.eval())
                 # After freezing, run 1 time to warm up the profiling graph executor to insert prim::profile
                 # At the 2nd run, the llga pass will be triggered and the model is turned into
@@ -2724,19 +2754,31 @@ class PyTorch_IPEXAdaptor(TemplateAdaptor):
                                 with torch.cpu.amp.autocast():
                                     q_model = ipex.quantization.convert(q_model, inplace=True)
                                     try:
-                                        q_model = torch.jit.trace(q_model, self.example_inputs)
+                                        if isinstance(self.example_inputs, dict) or isinstance(self.example_inputs, UserDict):
+                                            q_model = torch.jit.trace(q_model, example_kwarg_inputs=dict(self.example_inputs))  
+                                        else:  
+                                            q_model = torch.jit.trace(q_model, self.example_inputs)
                                         q_model = torch.jit.freeze(q_model.eval())
                                     except:
-                                        q_model = torch.jit.trace(q_model, self.example_inputs, strict=False)
+                                        if isinstance(self.example_inputs, dict) or isinstance(self.example_inputs, UserDict):
+                                            q_model = torch.jit.trace(q_model, example_kwarg_inputs=dict(self.example_inputs), strict=False)
+                                        else:    
+                                            q_model = torch.jit.trace(q_model, self.example_inputs, strict=False)
                                         q_model = torch.jit.freeze(q_model.eval())
                         else:
                             q_model = ipex.quantization.convert(q_model, inplace=True)
                             with torch.no_grad():
                                 try:
-                                    q_model = torch.jit.trace(q_model, self.example_inputs)
+                                    if isinstance(self.example_inputs, dict) or isinstance(self.example_inputs, UserDict):
+                                        q_model = torch.jit.trace(q_model, example_kwarg_inputs=dict(self.example_inputs))  
+                                    else:  
+                                        q_model = torch.jit.trace(q_model, self.example_inputs)
                                     q_model = torch.jit.freeze(q_model.eval())
                                 except:
-                                    q_model = torch.jit.trace(q_model, self.example_inputs, strict=False)
+                                    if isinstance(self.example_inputs, dict) or isinstance(self.example_inputs, UserDict):
+                                        q_model = torch.jit.trace(q_model, example_kwarg_inputs=dict(self.example_inputs), strict=False)
+                                    else:    
+                                        q_model = torch.jit.trace(q_model, self.example_inputs, strict=False)
                                     q_model = torch.jit.freeze(q_model.eval())
                         # After freezing, run 1 time to warm up the profiling graph executor to insert prim::profile
                         # At the 2nd run, the llga pass will be triggered and the model is turned into
@@ -3264,7 +3306,10 @@ class PyTorch_IPEXAdaptor(TemplateAdaptor):
                     # inference once after convert for SmoothQuant
                     self._simple_inference(q_model, dataloader, iterations=1)
                     try:
-                        q_model = torch.jit.trace(q_model, self.example_inputs)
+                        if isinstance(self.example_inputs, dict) or isinstance(self.example_inputs, UserDict):
+                            q_model = torch.jit.trace(q_model, example_kwarg_inputs=dict(self.example_inputs))  
+                        else:  
+                            q_model = torch.jit.trace(q_model, self.example_inputs)
                         q_model = torch.jit.freeze(q_model.eval())
                     except:
                         q_model = torch.jit.trace(q_model, self.example_inputs, strict=False)
@@ -3275,10 +3320,16 @@ class PyTorch_IPEXAdaptor(TemplateAdaptor):
             self._simple_inference(q_model, dataloader, iterations=1)
             with torch.no_grad():
                 try:
-                    q_model = torch.jit.trace(q_model, self.example_inputs)
+                    if isinstance(self.example_inputs, dict) or isinstance(self.example_inputs, UserDict):
+                        q_model = torch.jit.trace(q_model, example_kwarg_inputs=dict(self.example_inputs))  
+                    else:  
+                        q_model = torch.jit.trace(q_model, self.example_inputs)
                     q_model = torch.jit.freeze(q_model.eval())
                 except:
-                    q_model = torch.jit.trace(q_model, self.example_inputs, strict=False)
+                    if isinstance(self.example_inputs, dict) or isinstance(self.example_inputs, UserDict):
+                        q_model = torch.jit.trace(q_model, example_kwarg_inputs=dict(self.example_inputs), strict=False)
+                    else:    
+                        q_model = torch.jit.trace(q_model, self.example_inputs, strict=False)
                     q_model = torch.jit.freeze(q_model.eval())
         # After freezing, run 1 time to warm up the profiling graph executor to insert prim::profile
         # At the 2nd run, the llga pass will be triggered and the model is turned into
