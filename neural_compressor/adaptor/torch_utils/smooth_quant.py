@@ -19,8 +19,7 @@ from neural_compressor.utils.utility import LazyImport
 
 torch = LazyImport('torch')
 from ...utils import logger
-from collections import UserDict
-
+from collections import UserDict, defaultdict
 
 def forward_wrapper(model, input, device='cpu'):
     if isinstance(input, dict) or isinstance(input, UserDict):
@@ -224,8 +223,9 @@ class TorchSmoothQuant:
         def save_input_hook(module, inputs, outputs):
             input = inputs[0]
             ##TODO check input channel is correct
-            if len(module.weight.shape) == 4:  ##conv3d or conv1d not supported now, need better way
-                input = input.permute(0, 2, 3, 1)
+            if not isinstance(module, torch.nn.MultiheadAttention):
+                if len(module.weight.shape) == 4:  ##conv3d or conv1d not supported now, need better way
+                    input = input.permute(0, 2, 3, 1)
             input = input.reshape(-1, input.shape[-1])
             max_tensor = torch.max(input, dim=0)[0]
             min_tensor = torch.min(input, dim=0)[0]
@@ -300,8 +300,7 @@ class TorchSmoothQuant:
 
         for index, name in enumerate(hook_module_names_tmp):
             module = get_module(self.model, name)
-            if isinstance(module, torch.nn.Linear) or isinstance(module,
-                                                                 torch.nn.Conv2d):
+            if isinstance(module, torch.nn.Linear) or isinstance(module, torch.nn.Conv2d) or isinstance(module, torch.nn.Conv2d) or isinstance(module, torch.nn.MultiheadAttention):
                 if isinstance(module, torch.nn.Conv2d):
                     if self._check_dw_conv(module):
                         pass
@@ -345,7 +344,11 @@ class TorchSmoothQuant:
         :param layer_name: Layer name
         :return: The reshaped weight
         """
-        weight = get_module(self.model, layer_name).weight  ##TODO oc*ic, support transposed conv
+        module = get_module(self.model, layer_name)
+        if not isinstance(module, torch.nn.MultiheadAttention):
+            weight = module.weight  ##TODO oc*ic, support transposed conv
+        else:
+            weight = module.in_proj_weight
         if len(weight.shape) == 4:
             weight = weight.permute(0, 2, 3, 1)
             weight = weight.reshape(-1, weight.shape[-1])
@@ -364,7 +367,7 @@ class TorchSmoothQuant:
         elif isinstance(layer, torch.nn.Conv2d):
             scale = scale.view(1, scale.shape[0], 1, 1)
 
-        elif isinstance(layer, torch.nn.Linear):
+        elif isinstance(layer, torch.nn.Linear) or isinstance(layer, torch.nn.MultiheadAttention):
             scale = scale.view(1, scale.shape[0])
 
         return scale
@@ -396,7 +399,10 @@ class TorchSmoothQuant:
         if isinstance(layer, SQLinearWrapper):
             layer = layer.sq_linear
         scale = self._reshape_scale_for_weight(layer, scale)
-        layer.weight = torch.nn.Parameter(layer.weight * scale)
+        if isinstance(layer, torch.nn.MultiheadAttention):
+            layer.in_proj_weight = torch.nn.Parameter(layer.in_proj_weight * scale)
+        else:
+            layer.weight = torch.nn.Parameter(layer.weight * scale)
         return scale
 
     def _absorb_scales(self, layer_name, scale, alpha=0.5):  ##output channel
@@ -708,8 +714,23 @@ class TorchSmoothQuant:
             if alpha == 'auto':
                 alpha = self.alpha_per_layer
 
+            out_pre_sq = self.model(**self.example_inputs)
+
+            # Debug
+            #del self.absorb_to_layer['bridgetower.vision_model.visual.ln_post']
+
             self.weight_scale_info, self.absorb_scales_info = self._adjust_parameters(self.absorb_to_layer,
                                                                                       input_maxes, alpha)
+            #Check mathematical equivelancy
+            out_post_sq = self.model(**self.example_inputs)
+            logger.info("Total number of ops with smoothquant optimizations: " + str(len(self.absorb_to_layer)))
+            if not torch.all(torch.isclose(out_post_sq[0], out_pre_sq[0], atol = 1e-05)):
+                logger.warning("Mathematical equivelancy of Smoothquant is not preserved. Check implementation or model graph for branches")
+
+            else:
+                logger.info("Mathematical equivelancy of Smoothquant is preserved.")
+
+            self.model.absorb_to_layer = self.absorb_to_layer
             self.input_values, self.output_values = {}, {}
             return self.model
 
@@ -779,13 +800,15 @@ class GraphTrace:
             "InstanceNorm2d": "aten::instance_norm",
             "LlamaRMSNorm": "aten::mul",
             "T5LayerNorm": "aten::mul",
+            "MultiheadAttention":  "aten::_native_multi_head_attention"
         }
         ##TODO, must statisfy af(x)=f(ax),current skip layer may be incomplete
         self.skip_ops_to_find_absorb = ["aten::to",
                                         "aten::relu",
                                         "aten::leaky_relu",
                                         "aten::hardtanh",
-                                        "aten::alias"
+                                        "aten::unsqueeze", # for torch.nn.MultiHeadAttention
+                                        #"aten::alias"
                                         ]
 
         self.could_absorb_layers = ["aten::layer_norm", "aten::batch_norm", "aten::linear", "aten::_convolution",
@@ -827,7 +850,7 @@ class GraphTrace:
                     break
         return nodes
 
-    def get_prev_absorb_layer(self, nodes):
+    def get_prev_absorb_layer(self, nodes, dict_inp):
         prev_absorb_layer = []
         for node in nodes:
             parent = get_parent(node)
@@ -836,7 +859,13 @@ class GraphTrace:
                     parent = get_parent(parent)
                     continue
                 if parent.kind() in self.could_absorb_layers:
-                    prev_absorb_layer.append(parent)
+                    # Check if parent has multiple children of unsupported layers
+                    set_inp_type = set(dict_inp[parent])
+                    set_inp_type.discard('aten::size')
+                    if (set_inp_type.intersection(self.could_absorb_layers) == set_inp_type) or (set_inp_type.intersection(self.skip_ops_to_find_absorb) == set_inp_type):
+                        prev_absorb_layer.append(parent)
+                    else:
+                        prev_absorb_layer.append(None)
                 else:
                     prev_absorb_layer.append(None)
                 break
@@ -856,10 +885,17 @@ class GraphTrace:
         traced_model = self.trace(model, example_input)
         if traced_model == None:
             return None, None
+        
+        dict_inp = defaultdict(list)
+        for node in traced_model.graph.nodes():
+            inp_list = list(node.inputs())
+            for n in inp_list:
+                dict_inp[n.node()].append(node.kind())
+
         aten_op_types = self.mapping_torch_module_to_aten(op_types)
         nodes_types = self.get_nodes(traced_model, aten_op_types)
         nodes = [node_type[0] for node_type in nodes_types]
-        nodes_prev_absorb = self.get_prev_absorb_layer(nodes)
+        nodes_prev_absorb = self.get_prev_absorb_layer(nodes, dict_inp)
         absorb_to_layer = {}
         no_absorb_layers = []
         for index, absorb in enumerate(nodes_prev_absorb):
@@ -894,4 +930,7 @@ class GraphTrace:
                     break
             if supported:
                 res[key] = absorb_to_layer[key]
+
+            if layer_type == 'MultiheadAttention': # if multiheadattention, avoid multiple scaling
+                res[key] = [res[key][0]]
         return res

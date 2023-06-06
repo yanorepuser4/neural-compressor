@@ -1296,6 +1296,7 @@ class TemplateAdaptor(Adaptor):
             **kwargs
         )
         model._model._smoothquant_optimized = True
+        model.absorb_to_layer = model._model.absorb_to_layer
         return model
 
     def qdq_quantize(self, model, tune_cfg):
