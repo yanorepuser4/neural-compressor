@@ -708,21 +708,30 @@ class TorchSmoothQuant:
                     save_input_output = True
 
                 input_maxes = self._calibrate(self.absorb_to_layer, calib_iter, save_input_output)
+
+                # Check if input_maxes match self.absorb_to_layer (due to self._get_all_layer_names use layer tree instead of forward_path)
+                if not folding:
+                    diff_modules = set(self.absorb_to_layer.keys()).difference(input_maxes.keys())
+                    for d in diff_modules:
+                        del self.absorb_to_layer[d]
+
                 if alpha == 'auto':
                     self.alpha_per_layer = self._auto_tune_alpha(input_maxes, **auto_alpha_args)  ##save the alpha
 
             if alpha == 'auto':
                 alpha = self.alpha_per_layer
 
-            out_pre_sq = self.model(**self.example_inputs)
+
+            out_pre_sq = forward_wrapper(self.model, self.example_inputs, self.device)
 
             # Debug
-            #del self.absorb_to_layer['bridgetower.vision_model.visual.ln_post']
+            if 'bridgetower.vision_model.visual.ln_post' in self.absorb_to_layer and folding:
+                del self.absorb_to_layer['bridgetower.vision_model.visual.ln_post']
 
             self.weight_scale_info, self.absorb_scales_info = self._adjust_parameters(self.absorb_to_layer,
                                                                                       input_maxes, alpha)
             #Check mathematical equivelancy
-            out_post_sq = self.model(**self.example_inputs)
+            out_post_sq = forward_wrapper(self.model, self.example_inputs, self.device)
             logger.info("Total number of ops with smoothquant optimizations: " + str(len(self.absorb_to_layer)))
             if not torch.all(torch.isclose(out_post_sq[0], out_pre_sq[0], atol = 1e-05)):
                 logger.warning("Mathematical equivelancy of Smoothquant is not preserved. Check implementation or model graph for branches")
