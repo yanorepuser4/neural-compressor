@@ -231,8 +231,9 @@ class TorchSmoothQuant:
         def save_input_hook(module, inputs, outputs):
             input = inputs[0]
             ##TODO check input channel is correct
-            if len(module.weight.shape) == 4:  ##conv3d or conv1d not supported now, need better way
-                input = input.permute(0, 2, 3, 1)
+            if not isinstance(module, torch.nn.MultiheadAttention):
+                if len(module.weight.shape) == 4:  ##conv3d or conv1d not supported now, need better way
+                    input = input.permute(0, 2, 3, 1)
             input = input.reshape(-1, input.shape[-1])
             max_tensor = torch.max(input, dim=0)[0]
             min_tensor = torch.min(input, dim=0)[0]
@@ -307,8 +308,7 @@ class TorchSmoothQuant:
 
         for index, name in enumerate(hook_module_names_tmp):
             module = get_module(self.model, name)
-            if isinstance(module, torch.nn.Linear) or isinstance(module,
-                                                                 torch.nn.Conv2d):
+            if isinstance(module, torch.nn.Linear) or isinstance(module, torch.nn.Conv2d) or isinstance(module, torch.nn.MultiheadAttention):
                 if isinstance(module, torch.nn.Conv2d):
                     if self._check_dw_conv(module):
                         pass
@@ -352,7 +352,13 @@ class TorchSmoothQuant:
         :param layer_name: Layer name
         :return: The reshaped weight
         """
-        weight = get_module(self.model, layer_name).weight  ##TODO oc*ic, support transposed conv
+        #weight = get_module(self.model, layer_name).weight  ##TODO oc*ic, support transposed conv
+        module = get_module(self.model, layer_name)
+        if not isinstance(module, torch.nn.MultiheadAttention):
+            weight = module.weight  ##TODO oc*ic, support transposed conv
+        else:
+            weight = module.in_proj_weight
+
         if len(weight.shape) == 4:
             weight = weight.permute(0, 2, 3, 1)
             weight = weight.reshape(-1, weight.shape[-1])
@@ -403,7 +409,10 @@ class TorchSmoothQuant:
             from .model_wrapper import SQLinearWrapper
             layer = layer.sq_linear
         scale = self._reshape_scale_for_weight(layer, scale)
-        layer.weight = torch.nn.Parameter(layer.weight * scale)
+        if isinstance(layer, torch.nn.MultiheadAttention):
+            layer.in_proj_weight = torch.nn.Parameter(layer.in_proj_weight * scale)
+        else:
+            layer.weight = torch.nn.Parameter(layer.weight * scale)
         return scale
 
     def _absorb_scales(self, layer_name, scale, alpha=0.5):  ##output channel
@@ -746,7 +755,7 @@ class TorchSmoothQuant:
             self.weight_scale_info = {}  ##clear the data
             self.absorb_scales_info = {}
 
-    def _get_all_layer_names(self, op_types=['Linear']):
+    def _get_all_layer_names(self, op_types=['Linear', 'MultiheadAttention']):
         """
         Try the model to find the layers which can be smooth quantized.
         :param op_types: The op types to be smooth quantized

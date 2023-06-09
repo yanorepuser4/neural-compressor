@@ -104,7 +104,10 @@ class SQLinearWrapper(torch.nn.Module):
         # get weight scale and zero_point
         from torch.ao.quantization.observer import default_per_channel_weight_observer
         obs = default_per_channel_weight_observer()
-        obs(self.sq_linear.weight)
+        if isinstance(self.sq_linear, torch.nn.MultiheadAttention):
+            obs(self.sq_linear.in_proj_weight)
+        else:
+            obs(self.sq_linear.weight)
         scale, _ = obs.calculate_qparams()
         return scale
 
@@ -112,8 +115,10 @@ class SQLinearWrapper(torch.nn.Module):
         # remove mul and reset sq_linear for ipex inference
         scale = self.input_scale.view(1, self.input_scale.shape[0])
         with torch.no_grad():
-            self.sq_linear.weight *= scale
-
+            if isinstance(self.sq_linear, torch.nn.MultiheadAttention):
+                self.sq_linear.in_proj_weight *= scale
+            else:
+                self.sq_linear.weight *= scale
 
 def _wrapper_sq_linear(tmp_model, input_scale_dict):
     """Help function to generate a fake SmoothQuant model for loading weights"""
