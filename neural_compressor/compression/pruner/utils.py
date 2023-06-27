@@ -505,8 +505,8 @@ def parse_to_prune(config, model):
     modules = {}
     # additional function: exclude last layer (often a classifier head and not suitable to be pruned)
     classifier_head_name = parse_last_linear(model)
-    if classifier_head_name != None:
-        config["excluded_op_names"].append(classifier_head_name)
+    #if classifier_head_name != None:
+    #    config["excluded_op_names"].append(classifier_head_name)
     # locate target layers
     if config["op_names"] == None or config["op_names"] == []:
         config["op_names"] = [".*"]
