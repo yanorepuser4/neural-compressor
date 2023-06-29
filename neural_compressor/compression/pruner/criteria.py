@@ -16,10 +16,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import numpy as np
 from ...utils.utility import LazyImport
 torch = LazyImport('torch')
-tf = LazyImport('tensorflow')
 
 
 CRITERIA = {}
@@ -35,12 +33,12 @@ def register_criterion(name):
     return register
 
 
-def get_criterion(config, modules, framework='pytorch'):
+def get_criterion(config, modules):
     """Get registered criterion class."""
     name = config["criterion_type"]
     if name not in CRITERIA.keys():
         assert False, f"criteria does not support {name}, currently only support {CRITERIA.keys()}"
-    return CRITERIA[name](modules, config, framework)
+    return CRITERIA[name](modules, config)
 
 
 class PruningCriterion:
@@ -54,12 +52,12 @@ class PruningCriterion:
         scores: A dict {"module_name": Tensor} that stores the scores of pruning modules.
     """
 
-    def __init__(self, modules, config, framework='pytorch'):
+    def __init__(self, modules, config):
         """Initiliaze a pruning criterion."""
         self.scores = {}
         self.modules = modules
         self.config = config
-        self.framework=framework
+        self.low_memory_usage = config['low_memory_usage']
 
     def on_step_begin(self):
         """Calculate and store the pruning scores of pruning modules at the beginning of a step."""
@@ -89,21 +87,18 @@ class MagnitudeCriterion(PruningCriterion):
         scores: A dict {"module_name": Tensor} that stores the scores of pruning modules.
     """
 
-    def __init__(self, modules, config, framework='pytorch'):
+    def __init__(self, modules, config):
         """Initiliaze a magnitude pruning criterion."""
-        super(MagnitudeCriterion, self).__init__(modules, config, framework)
+        super(MagnitudeCriterion, self).__init__(modules, config)
 
     def on_step_begin(self):
         """Calculate and store the pruning scores based on a magnitude criterion."""
-        if self.framework == 'pytorch':
-            with torch.no_grad():
-                for key in self.modules.keys():
-                    p = self.modules[key].weight.data
-                    self.scores[key] = torch.abs(p)
-        elif self.framework == 'keras':
+
+        with torch.no_grad():
             for key in self.modules.keys():
-                p = self.modules[key].get_weights()[0]
-                self.scores[key] = np.abs(p)
+                p = self.modules[key].weight.data
+                self.scores[key] = torch.abs(p)
+
 
 @register_criterion('gradient')
 class GradientCriterion(PruningCriterion):
@@ -120,14 +115,13 @@ class GradientCriterion(PruningCriterion):
         scores: A dict {"module_name": Tensor} that stores the scores of pruning modules.
     """
 
-    def __init__(self, modules, config, framework='pytorch'):
+    def __init__(self, modules, config):
         """Initiliaze a gradient pruning criterion."""
-        super(GradientCriterion, self).__init__(modules, config, framework)
+        super(GradientCriterion, self).__init__(modules, config)
         assert self.config.end_step > 0, "please set end_step > 0 for gradient based criterion"
 
     def on_before_optimizer_step(self):
         """Calculate and store the pruning scores based on gradient criterion."""
-        assert self.framework != 'keras', "This pruning criterion is not supported by Keras now."
         with torch.no_grad():
             for key in self.modules.keys():
                 p = self.modules[key].weight
@@ -151,15 +145,13 @@ class SnipCriterion(PruningCriterion):
         scores: A dict {"module_name": Tensor} that stores the scores of pruning modules.
     """
 
-    def __init__(self, modules, config, framework='pytorch'):
+    def __init__(self, modules, config):
         """Initiliaze a snip pruning criterion."""
-        super(SnipCriterion, self).__init__(modules, config, framework)
+        super(SnipCriterion, self).__init__(modules, config)
         assert self.config.end_step > 0, "please set end_step > 0 for gradient based criterion"
 
     def on_before_optimizer_step(self):
         """Calculate and store the pruning scores based on snip criterion."""
-        ##self.mask_weights()
-        assert self.framework != 'keras', "This pruning criterion is not supported by Keras now."
         with torch.no_grad():
             for key in self.modules.keys():
                 p = self.modules[key].weight
@@ -184,17 +176,19 @@ class SnipMomentumCriterion(PruningCriterion):
         scores: A dict {"module_name": Tensor} that stores the scores of pruning modules.
     """
 
-    def __init__(self, modules, config, framework='pytorch'):
+    def __init__(self, modules, config, alpha=0.9, beta=1.0):
         """Initiliaze a snip_momentum pruning criterion."""
-        super(SnipMomentumCriterion, self).__init__(modules, config, framework)
-        assert self.framework != 'keras', "This pruning criterion is not supported by Keras now."
+        super(SnipMomentumCriterion, self).__init__(modules, config)
         assert self.config.end_step > 0, "please set end_step > 0 for gradient based criterion"
         for key in modules.keys():
             p = modules[key].weight
-            self.scores[key] = torch.zeros(p.shape).to(p.device)
+            dtype = torch.float32
+            if self.low_memory_usage:
+                dtype = torch.bfloat16 if p.device.type == 'cpu' else torch.float16
+            self.scores[key] = torch.zeros(p.shape, dtype=dtype).to(p.device)
 
-        self.alpha = 0.9
-        self.beta = 1.0
+        self.alpha = alpha
+        self.beta = beta
 
     def on_before_optimizer_step(self):
         """Calculate and store the pruning scores based on snip_momentum criterion."""
@@ -203,8 +197,59 @@ class SnipMomentumCriterion(PruningCriterion):
                 p = self.modules[key].weight
                 self.scores[key] *= self.alpha
                 self.scores[key] += self.beta * torch.abs(p * p.grad)
-                
-                
+                if self.low_memory_usage:
+                    self.scores[key] = self.scores[key].bfloat16() if p.device.type == 'cpu' \
+                        else self.scores[key].half()
+
+
+@register_criterion('snip_momentum_tick_tock')
+class SnipMomentumTTCriterion(PruningCriterion):
+    """Pruning criterion.
+
+    The snip_momentum criterion_class is derived from PruningCriterion.
+    A momentum mechanism is used to calculate snip score, which determines if a weight is to be pruned.
+
+    Args:
+        config: A config dict object that includes information about pruner and pruning criterion.
+        modules: A dict {"module_name": Tensor} that stores the pruning modules' weights.
+        alpha: A parameter that determines how much of the snip score is preserved from last pruning step.
+        beta: A parameter that determines how much of the snip score is updated at the current step.
+
+    Attributes:
+        scores: A dict {"module_name": Tensor} that stores the scores of pruning modules.
+    """
+
+    def __init__(self, modules, config, alpha=0.9, beta=1.0):
+        """Initiliaze a snip_momentum pruning criterion."""
+        super(SnipMomentumTTCriterion, self).__init__(modules, config)
+        assert self.config.end_step > 0, "please set end_step > 0 for gradient based criterion"
+        for key in modules.keys():
+            p = modules[key].weight
+            dtype = torch.float32
+            if self.low_memory_usage:
+                dtype = torch.bfloat16 if p.device.type == 'cpu' else torch.float16
+            self.scores[key] = torch.zeros(p.shape, dtype=dtype).to(p.device)
+
+        self.alpha = alpha
+        self.beta = beta
+
+    def mul_weight(self):
+        with torch.no_grad():
+            for key in self.modules.keys():
+                p = self.modules[key].weight
+                self.scores[key] = self.scores[key].to(torch.float32)
+                self.scores[key] *= torch.abs(p)
+
+
+    def on_before_optimizer_step(self):
+        """Calculate and store the pruning scores based on snip_momentum criterion."""
+        with torch.no_grad():
+            for key in self.modules.keys():
+                p = self.modules[key].weight
+                self.scores[key] *= self.alpha
+                self.scores[key] += (self.beta * torch.abs(p.grad)).half()
+
+
 @register_criterion('snip_momentum_block')
 class SnipMomentumBlockCriterion(PruningCriterion):
     """Pruning criterion.
@@ -222,16 +267,18 @@ class SnipMomentumBlockCriterion(PruningCriterion):
         scores: A dict {"module_name": Tensor} that stores the scores of pruning modules.
     """
 
-    def __init__(self, modules, config, framework='pytorch'):
+    def __init__(self, modules, config):
         """Initiliaze a block_mask pruning criterion."""
-        super(SnipMomentumBlockCriterion, self).__init__(modules, config, framework)
-        assert self.framework != 'keras', "This pruning criterion is not supported by Keras now."
+        super(SnipMomentumBlockCriterion, self).__init__(modules, config)
         assert self.config.end_step > 0, "please set end_step > 0 for gradient based criterion"
         for key in self.modules.keys():
             if not hasattr(self.modules[key], 'block_mask'):
                 continue # No corresponding block mask, skip.
             mask = self.modules[key].block_mask
-            self.scores[key] = torch.zeros(mask.shape).to(mask.device)
+            dtype = torch.float32
+            if self.low_memory_usage:
+                dtype = torch.bfloat16 if mask.device.type == 'cpu' else torch.float16
+            self.scores[key] = torch.zeros(mask.shape, dtype=dtype).to(mask.device)
         self.alpha = 0.9
         self.beta = 1.0
 
@@ -244,6 +291,9 @@ class SnipMomentumBlockCriterion(PruningCriterion):
                 mask = self.modules[key].block_mask
                 self.scores[key] *= self.alpha
                 self.scores[key] += self.beta * torch.abs(mask.grad)
+                if self.low_memory_usage:
+                    self.scores[key] = self.scores[key].bfloat16() if mask.device.type == 'cpu' \
+                        else self.scores[key].float16()
 
 
 @register_criterion('retrain_free')
@@ -262,10 +312,9 @@ class RetrainFreeCriterion(PruningCriterion):
         scores: A dict {"module_name": Tensor} that stores the scores of pruning modules.
     """
 
-    def __init__(self, modules, config, framework='pytorch'):
+    def __init__(self, modules, config):
         """Initiliaze a block_mask pruning criterion."""
-        super(RetrainFreeCriterion, self).__init__(modules, config, framework)
-        assert self.framework != 'keras', "This pruning criterion is not supported by Keras now."
+        super(RetrainFreeCriterion, self).__init__(modules, config)
         assert self.config.end_step > 0, "please set end_step > 0 for gradient based criterion"
         self.collected_grads = {}
         for key in self.modules.keys():
@@ -277,7 +326,10 @@ class RetrainFreeCriterion(PruningCriterion):
             if not hasattr(self.modules[key], 'block_mask'):
                 continue # No corresponding block mask, skip.
             mask = self.modules[key].block_mask
-            self.scores[key] = torch.zeros(mask.shape).to(mask.device)
+            dtype = torch.float32
+            if self.low_memory_usage:
+                dtype = torch.bfloat16 if mask.device.type == 'cpu' else torch.float16
+            self.scores[key] = torch.zeros(mask.shape, dtype=dtype).to(mask.device)
             self.collected_grads[key] = []
 
     def on_before_optimizer_step(self):
@@ -289,4 +341,7 @@ class RetrainFreeCriterion(PruningCriterion):
                 mask_grad = self.modules[key].block_mask.grad.clone()
                 self.collected_grads[key].append(mask_grad)
                 self.scores[key] += mask_grad.pow(2)
+                if self.low_memory_usage:
+                    self.scores[key] = self.scores[key].bfloat16() if mask_grad.device.type == 'cpu' \
+                        else self.scores[key].float16()
     

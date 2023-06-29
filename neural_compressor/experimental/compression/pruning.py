@@ -144,8 +144,10 @@ def save(
     else:
         torch.orig_save(obj, f)
 
+def lossfun(output, label):
+    return output.loss
 
-def prepare_pruning(config, model: torch.nn.Module, opt: torch.optim.Optimizer):
+def prepare_pruning(config, model: torch.nn.Module, opt: torch.optim.Optimizer, dataloader=None, loss_func=None):
     """Wrapper the model and optimizer to support all the pruning functionality.
 
     :param config: WeightPruningConfig
