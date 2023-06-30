@@ -14,7 +14,7 @@ parser.add_argument(
 args = parser.parse_args()
 model_name = args.model_name
 model = torch.load("gpt-j-6b-prune.pt")
-device = torch.device("cuda:3")
+device = torch.device("cuda:0")
 model.to(device)
 results = lm_evaluate(model="hf-causal",
                       model_args=f'pretrained="{model_name}",tokenizer="{model_name}",dtype=float16',
