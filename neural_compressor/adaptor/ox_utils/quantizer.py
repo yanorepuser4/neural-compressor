@@ -144,21 +144,35 @@ class Quantizer:
             return True
         else:
             return False
+    
+    def _inspect_node_type(self, stage="N/A"):
+        logger.info(f"In {stage} stage, node list ")
+        ops_lst = [(n.name, n.op_type) for n in self.model.nodes()]
+        for op_info in ops_lst:
+            logger.info(op_info)
+        logger.info(f"----------------------------")
 
     def quantize_model(self):
         """Quantize onnx model."""
         # step 1: insert q-dq, cast-cast pairs
+        self._inspect_node_type("before insert qdq")
         self.insert_qdq()
+        
+        self._inspect_node_type("after insert qdq")
  
         # step 2: remove redundant pairs -> qdq model
         self.remove_redundant_pairs()
+        self._inspect_node_type("after remove redundant pairs")
  
         # step 3: convert q-node-dq to qlinear op if needed
         self.convert_qdq_to_operator_oriented()
+        self._inspect_node_type("after convert_qdq_to_operator_oriented")
  
         self.merge_dedicated_qdq_pair() 
+        self._inspect_node_type("after merge_dedicated_qdq_pair")
  
         self.model.remove_unused_constant()
+        self._inspect_node_type("remove_unused_constant")
 
         self.model.model.producer_name = __producer__
         self.model.model.producer_version = __version__
