@@ -74,7 +74,7 @@ This step is to verify the graph_def with inserted qdq can be successfully saved
 The reconstruted model will be saved to './converted_resnet50'.
 By checking the directory of this saved_model, we can see the variables folder is not empty.
   ```shell
-  python convert.py --insert_qdq.py
+  python convert.py --insert_qdq
   ```
 
 When running this script, two pb files will be dumped: ```extracted_graph_def.pb``` and ```converted_graph_def.pb```. 
