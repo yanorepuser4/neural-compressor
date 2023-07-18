@@ -16,14 +16,16 @@ from tensorflow.python.training import saver
 from tensorflow.core.framework import variable_pb2
 from tensorflow.python.eager import wrap_function
 from tensorflow.python.util import nest
+from tensorflow.python.saved_model import save
+
+from insert_qdq import InsertQDQPatternBeforeMatmul
 
 from argparse import ArgumentParser
 arg_parser = ArgumentParser(description='Parse args')
-arg_parser.add_argument('--input_model', dest='input_model',
-                          help='location of input_model')
+arg_parser.add_argument('--insert_qdq', dest='insert_qdq', action='store_true', default=False, help='whether to insert qdq patterns.')
 args = arg_parser.parse_args()
 
-class DumpSavedModel():
+class ConvertSavedModel():
     def _apply_inlining(self, func):
         """Apply an inlining optimization to the function's graph definition."""
         graph_def = func.graph.as_graph_def()
@@ -99,7 +101,7 @@ class DumpSavedModel():
 
         return new_func
 
-    def dump_graph(self, src):
+    def __call__(self, src, dst):
         config = tf.compat.v1.ConfigProto()
         config.use_per_session_threads = 1
         config.inter_op_parallelism_threads = 1
@@ -127,9 +129,24 @@ class DumpSavedModel():
         extracted_graph_def = tf_optimizer.OptimizeGraph(grappler_session_config,
                                             grappler_meta_graph_def, graph_id=b"tf_graph")
 
-        f=tf.io.gfile.GFile('dumped_graph.pb','wb')
+        f=tf.io.gfile.GFile('extracted_graph_def.pb','wb')
         f.write(extracted_graph_def.SerializeToString()) 
 
+        if args.insert_qdq:
+            converted_graph_def = InsertQDQPatternBeforeMatmul(extracted_graph_def).do_transformation()
+        else:
+            converted_graph_def = extracted_graph_def
+
+        f=tf.io.gfile.GFile('converted_graph_def.pb','wb')
+        f.write(converted_graph_def.SerializeToString()) 
+
+        converted_func = self._construct_function_from_graph_def(
+            func, converted_graph_def, frozen_func)
+
+        trackable = _saved_model
+        signatures = {signature_constants.DEFAULT_SERVING_SIGNATURE_DEF_KEY: converted_func}
+        save.save(trackable, dst, signatures, options=None)
+    
 if __name__ == "__main__":
-    converter = DumpSavedModel()
-    converter.dump_graph(src=args.input_model)
+    converter = ConvertSavedModel()
+    converter(src='./gpt-j-6B', dst='./converted_gpt-j-6B')
