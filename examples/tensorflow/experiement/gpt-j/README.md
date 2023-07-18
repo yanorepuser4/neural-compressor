@@ -22,7 +22,7 @@ pip install -r requirements.txt
 
 ## 2. Prepare Pretrained model
 
-The pretrained model is provided by [Keras Applications](https://keras.io/api/applications/). prepare the model, Run as follow: 
+The pretrained model is provided by Huggingface. Please run the following code to save the gpt-j-6B to ```saved_model``` format: 
  ```
 python prepare_model.py
  ```
@@ -169,5 +169,5 @@ We can also dump graph from the saved_model to check if the conversion is succes
   ```shell
   python dump_graph_from_saved_model.py --input_model=./converted_gpt-j-6B
   ```
-  
+
 The dumped graph will be saved at './dumped_graph.pb'
