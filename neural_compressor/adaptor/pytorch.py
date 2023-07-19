@@ -3690,6 +3690,10 @@ class PyTorch_FP8Adaptor(TemplateAdaptor):
                 repr(e)))
             q_model = model
 
+        if self.mix_precision == "True":
+            # updated in self.input_dtype, self.weight_dtype
+            self._auto_mix_precision(q_model._model, dataloader)
+
         model_qconfig_dict = self._cfg_to_qconfig()
         # Update BN mean and var.
         self._update_bn_statistics(q_model._model, dataloader, model_qconfig_dict)
@@ -3732,7 +3736,11 @@ class PyTorch_FP8Adaptor(TemplateAdaptor):
                 continue
             # Experimental feature.
             if self.mix_precision == "True":
-                dtype_w, dtype_i = 'fp8_e3m4', 'fp8_e4m3'
+                dtype_w, dtype_i = 'fp8_e3m4', 'fp8_e3m4'
+                if k[0] in self.input_dtype:
+                    dtype_i = self.input_dtype[k[0]]
+                if k[0] in self.weight_dtype:
+                    dtype_w = self.weight_dtype[k[0]]
             # TODO： FP8_E5M2 Precision from strategy need to split for weight and activation
             # Here is a workaround for Embedding and EmbeddingBag.
             if k[1] in ['Embedding', 'EmbeddingBag']:
@@ -3937,6 +3945,59 @@ class PyTorch_FP8Adaptor(TemplateAdaptor):
             # Replace BN with scaleshift.
             from mpemu import scale_shift
             model = scale_shift.replace_batchnorms_with_scaleshifts(model)
+
+    def _auto_mix_precision(self, model, dataloader):
+        def convert_hf8(input, qconfig, granularity='per_tensor'):
+            from neural_compressor.adaptor.torch_utils.util import quantize_tensor
+            input_q = torch.zeros(input.shape)
+            if granularity == 'per_channel':
+                # this would be innerloop parallelized.
+                for i, data in enumerate(input):
+                    input_q[i] = quantize_tensor(input[i], qconfig)
+            else:
+                input_q = quantize_tensor(input, qconfig)
+            mse_val = (input_q - input).pow(2).sum()
+            return mse_val
+
+        def register_hooks(model):
+            def _input_hook(name):
+                def _hook(module, inputs, outputs):
+                    input = inputs[0]
+                    from mpemu.qutils import TensorQuantConfig
+                    # activation
+                    ic_qconfig = TensorQuantConfig('e4m3', 'rne')
+                    mse_1 = convert_hf8(input, ic_qconfig)
+                    ic_qconfig = TensorQuantConfig('e3m4', 'rne')
+                    mse_2 = convert_hf8(input, ic_qconfig)
+                    if mse_1<mse_2:
+                        logger.info('Set E4M3 for {} input.'.format(name))
+                    self.input_dtype[name] = 'fp8_e4m3' if mse_1<mse_2 else 'fp8_e3m4'
+                    # weight
+                    w_qconfig = TensorQuantConfig('e4m3', 'rne', 'per_channel')
+                    mse_1 = convert_hf8(module.weight, w_qconfig)
+                    w_qconfig = TensorQuantConfig('e3m4', 'rne', 'per_channel')
+                    mse_2 = convert_hf8(module.weight, w_qconfig)
+                    if mse_1<mse_2:
+                        logger.info('Set E4M3 for {} weight.'.format(name))
+                    self.weight_dtype[name] = 'fp8_e4m3' if mse_1<mse_2 else 'fp8_e3m4'
+                return _hook
+
+            hook_list = []
+            for name, module in model.named_modules():
+                if str(module.__class__.__name__) in ['Conv2d', 'Linear', 'LayerNorm']:
+                    tmp_hook = module.register_forward_hook(_input_hook(name))
+                    hook_list.append(tmp_hook)
+            return hook_list
+
+        self.input_dtype = {}
+        self.weight_dtype = {}
+        logger.info('By default, set E3M4 for all layer input and weight.')
+        logger.info('Search for the best data type:')
+        hook_list = register_hooks(model)
+        self.calib_func(model, dataloader, tmp_iterations=1)
+        logger.info('End of search.')
+        for h in hook_list:
+            h.remove()
 
     def evaluate(self,
                  model,
