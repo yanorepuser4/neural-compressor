@@ -1061,7 +1061,14 @@ class ONNXRUNTIMEAdaptor(Adaptor):
                         else: # pragma: no cover
                             op_wise.update(
                                 {(node.name, node.op_type): copy.deepcopy(optype_wise[node.op_type])})
+        logger.info("recipes_ops", recipes_ops)
+        logger.info("block_wise", block_wise)
 
+        recipes_ops = {}
+        recipes_ops['first_conv_or_matmul_quantization'] = []
+        recipes_ops['last_conv_or_matmul_quantization'] = []
+        recipes_ops['pre_post_process_quantization'] = []
+        block_wise = []
         return {'optypewise': optype_wise, 'opwise': op_wise, 'recipes_ops': recipes_ops, 'block_wise': block_wise}
 
     def _optypewise_filter_for_qdq(self, optype_wise):

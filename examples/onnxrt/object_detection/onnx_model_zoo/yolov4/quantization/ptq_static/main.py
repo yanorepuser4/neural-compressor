@@ -538,9 +538,7 @@ if __name__ == "__main__":
         config = PostTrainingQuantConfig(approach='static', 
                                          quant_format=args.quant_format,
                                          calibration_sampling_size=[1],
-                                         accuracy_criterion=accuracy_criterion,
-                                         recipes={'first_conv_or_matmul_quantization': False,
-                                                  'last_conv_or_matmul_quantization': False,
-                                                  'pre_post_process_quantization': False})
+                                         diagnosis=True,
+                                         quant_level=1)
         q_model = quantization.fit(model, config, calib_dataloader=dataloader, eval_func=eval_func)
         q_model.save(args.output_model)

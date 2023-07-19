@@ -284,7 +284,7 @@ if __name__ == "__main__":
         accuracy_criterion = AccuracyCriterion()
         accuracy_criterion.relative = 0.02
         config = PostTrainingQuantConfig(quant_format=args.quant_format,
-            accuracy_criterion=accuracy_criterion)
+            quant_level=1, diagnosis=True)
  
         q_model = quantization.fit(model, config, calib_dataloader=dataloader,
 			     eval_func=eval)

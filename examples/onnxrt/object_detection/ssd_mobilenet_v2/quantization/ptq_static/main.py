@@ -145,7 +145,8 @@ if __name__ == "__main__":
         accuracy_criterion = AccuracyCriterion()
         accuracy_criterion.absolute = 0.01
         config = PostTrainingQuantConfig(approach='static', 
-                                         accuracy_criterion=accuracy_criterion,
+                                         quant_level=1,
+                                         diagnosis=True,
                                          quant_format=args.quant_format,
                                          calibration_sampling_size=[50])
         q_model = quantization.fit(model, config, calib_dataloader=calib_dataloader, eval_func=eval_func)
