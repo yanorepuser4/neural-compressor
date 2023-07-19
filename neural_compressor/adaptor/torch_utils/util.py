@@ -766,7 +766,10 @@ def quantize_tensor(tensor, qtconfig, scale=None, inplace=False):
     if qtconfig.scheme is not None:
         mode += "_"+qtconfig.scheme.upper()
 
-    from mpemu.pytquant.cpp import fpemu_cpp
+    if tensor.device.type == 'cuda':
+        from mpemu.pytquant.cuda import fpemu_cuda as fpemu_cpp
+    else:
+        from mpemu.pytquant.cpp import fpemu_cpp
     try:
         tensor_q = fpemu_cpp.FPEmuOp.apply(tensor, mode, inplace, scale)
     except:
