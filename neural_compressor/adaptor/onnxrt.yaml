@@ -30,7 +30,7 @@
                     'dtype': ['uint8'],
                     'scheme': ['asym'],
                     'granularity': ['per_tensor'],
-                    'algorithm': ['minmax', 'kl', 'percentile']
+                    'algorithm': ['minmax']
                     },
         'mode': ['QDQ', 'QLinear']
       },
