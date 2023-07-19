@@ -296,7 +296,7 @@ if __name__ == "__main__":
         accuracy_criterion.relative = 0.03
 
         config = PostTrainingQuantConfig(
-            diagnosis=True,
+            # diagnosis=True,
             quant_format=args.quant_format,
             quant_level=1)
  
