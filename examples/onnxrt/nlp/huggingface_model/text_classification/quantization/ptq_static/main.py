@@ -428,6 +428,7 @@ if __name__ == "__main__":
             specific_quant_config['quant_level'] = 1
         config = PostTrainingQuantConfig(approach='static',
                                          quant_format=args.quant_format,
+                                         quant_level=1,
                                          **specific_quant_config)
         q_model = quantization.fit(model, 
                                    config,
