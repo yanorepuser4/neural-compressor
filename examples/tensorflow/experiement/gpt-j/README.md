@@ -135,20 +135,21 @@ node {
   ```
 
 The following results are expected to be shown:
-  ```shell
-  ---------------------------------------------------------
-  The infrence results of original gpt-j with TF2.x API
-  Batch size = 8
-  Latency: 56324.354 ms
-  Throughput: 0.018 images/sec
-  ---------------------------------------------------------
-  The infrence results of converted gpt-j with TF2.x API
-  Batch size = 8
-  Latency: 48612.103 ms
-  Throughput: 0.021 images/sec
-  ---------------------------------------------------------
-  MSE of the output logits between two models = 6.612018585205078
-  ```
+```shell
+---------------------------------------------------------
+The infrence results of original gpt-j with TF2.x API
+Batch size = 8
+Latency: 54790.604 ms
+Throughput: 0.018 images/sec
+---------------------------------------------------------
+The infrence results of converted gpt-j with TF2.x API
+Batch size = 8
+Latency: 35146.368 ms
+Throughput: 0.028 images/sec
+---------------------------------------------------------
+MSE of the output logits between two models = 7.117039203643799
+
+```
 
 Because it's complicated to rewrite the code of computing accuracy using TF2.x API instead of transformers API, MSE similarity is calculated for the logits outputs between the two models.
 
