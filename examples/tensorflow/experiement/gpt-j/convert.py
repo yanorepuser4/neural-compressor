@@ -18,14 +18,25 @@ from tensorflow.python.eager import wrap_function
 from tensorflow.python.util import nest
 from tensorflow.python.saved_model import save
 
-from insert_qdq import InsertQDQPatternBeforeMatmul
-
-from argparse import ArgumentParser
-arg_parser = ArgumentParser(description='Parse args')
-arg_parser.add_argument('--insert_qdq', dest='insert_qdq', action='store_true', default=False, help='whether to insert qdq patterns.')
-args = arg_parser.parse_args()
+# from insert_qdq import GenerateGraphWithQDQPattern
+from configs import op_wise_config, int8_sequences
 
 class ConvertSavedModel():
+    def __init__(self, src='./gpt-j-6B', dst='./converted_gpt-j-6B', quantize=False, evaluate=None):
+        self.src = src
+        self.dst = dst
+        self.fp32_ops = []
+        self.bf16_ops = []
+        self.new_api = True
+        self.device ='cpu'
+        self.itex_mode = False
+        self.fake_quant = False 
+        self.evaluate = evaluate
+        self.performance_only = False
+        self.apply_quantize = quantize
+        self.op_wise_config = op_wise_config
+        self.int8_sequences = int8_sequences
+
     def _apply_inlining(self, func):
         """Apply an inlining optimization to the function's graph definition."""
         graph_def = func.graph.as_graph_def()
@@ -101,24 +112,165 @@ class ConvertSavedModel():
 
         return new_func
 
-    def __call__(self, src, dst):
+    def inc_preoptimize(self, graph_def):
+        from neural_compressor import Model
+        from neural_compressor.adaptor.tf_utils.graph_rewriter.generic.pre_optimize import PreOptimization
+        pre_optimizer_handle = PreOptimization(Model(graph_def), self.new_api, self.device)
+        pre_optimized_model = pre_optimizer_handle.get_optimized_model(self.itex_mode)
+        return pre_optimized_model.graph_def
+
+    def _search_y_pattern_for_itex(self, graph_def):
+        """Search the Y pattern for itex and return the op name."""
+        from neural_compressor.adaptor.tf_utils.graph_util import GraphAnalyzer
+        g = GraphAnalyzer()
+        g.graph = graph_def
+        g.parse_graph()
+        y_pattern = [['Conv2D', 'MatMul'], ['BiasAdd'], ['Add', 'AddV2', 'AddN'], ('Relu',)]
+        y_pattern_variant = [['MaxPool', 'AvgPool'], ['Add', 'AddV2', 'AddN'], ('Relu',)]
+        target_nodes = g.query_fusion_pattern_nodes(y_pattern)
+        target_nodes_variant = g.query_fusion_pattern_nodes(y_pattern_variant)
+
+        res = {}
+        for i in target_nodes:
+            if i[2] not in res:
+                res[i[2]] = 1
+            else:
+                res[i[2]] += 1
+        matched_add_nodes = [(i,) for i in res if res[i] == 2]
+        for i in res:
+            if res[i] == 1:
+                for j in target_nodes_variant:
+                    if j[1] == i:
+                        matched_add_nodes.append((i,))
+        return matched_add_nodes
+
+    def reconstruct_saved_model(self, converted_graph_def):
+        converted_func = self._construct_function_from_graph_def(
+        self.func, converted_graph_def, self.frozen_func)
+
+        trackable = self._saved_model
+        signatures = {signature_constants.DEFAULT_SERVING_SIGNATURE_DEF_KEY: converted_func}
+        save.save(trackable, self.dst, signatures, options=None)
+
+    def _inference(self, sampling_graph_def):
+        import time
+        print('Inference the saved_model and capture outputs to files')
+        self.reconstruct_saved_model(sampling_graph_def)
+        start = time.time()
+        _, _ = self.evaluate(self.dst)
+        end = time.time()
+        print('Calibration Inference Time: ', end-start)
+
+    def quantize(self, graph_def):
+        import copy
+        import tempfile
+        from neural_compressor.utils.utility import CaptureOutputToFile
+        from neural_compressor.adaptor.tf_utils.graph_util import GraphRewriterHelper as Helper
+        from neural_compressor.adaptor.tf_utils.graph_rewriter.qdq.insert_qdq_pattern import GenerateGraphWithQDQPattern
+        from neural_compressor.adaptor.tf_utils.quantize_graph.qdq.optimize_qdq import OptimizeQDQGraph
+        from neural_compressor.adaptor.tf_utils.graph_rewriter.int8.freeze_value import FreezeValueTransformer
+        from neural_compressor.adaptor.tf_utils.graph_rewriter.generic.insert_print_node import InsertPrintMinMaxNode
+        from neural_compressor.adaptor.tf_utils.graph_rewriter.qdq.merge_duplicated_qdq import MergeDuplicatedQDQOptimizer
+        from neural_compressor.adaptor.tf_utils.graph_rewriter.generic.strip_unused_nodes import StripUnusedNodesOptimizer
+        from neural_compressor.adaptor.tf_utils.graph_rewriter.qdq.share_qdq_y_pattern import ShareQDQForItexYPatternOptimizer
+        from neural_compressor.adaptor.tf_utils.graph_rewriter.generic.fuse_pad_with_fp32_conv import FusePadWithFP32Conv2DOptimizer
+
+        self.quantized_node_info = OptimizeQDQGraph(graph_def,
+                                        ['attention_mask', 'input_ids'],
+                                        ['Identity', 'Identity_1'],
+                                        self.op_wise_config,
+                                        self.int8_sequences,
+                                        self.device,
+                                        self.fake_quant,
+                                        self.new_api,
+                                        self.performance_only,
+                                        self.itex_mode).get_quantized_nodes()
+
+        if self.itex_mode:
+            self.quantized_node_info.extend(self._search_y_pattern_for_itex(graph_def))
+
+        print('Start to do calibration')
+        # Calibration using sampling model
+        sampling_graph_def = copy.deepcopy(graph_def)
+        # TODO: this is a workaround to make Min/Max node be completly eliminated in int8 graph
+        # after enabling pad+conv2d in new API.
+        non_pad_ops = list(list(set(self.fp32_ops).union(set(self.bf16_ops))))
+        sampling_graph_def = FusePadWithFP32Conv2DOptimizer(
+                                    sampling_graph_def,
+                                    non_pad_ops,
+                                    ['attention_mask', 'input_ids'],
+                                    self.op_wise_config,
+                                    self.new_api,
+                                    True).do_transformation()
+
+        for i in self.quantized_node_info:
+            sampling_graph_def, _ = InsertPrintMinMaxNode(
+                sampling_graph_def, i[0], i[-1], self.new_api).do_transformation()
+
+        tmp_dump_file = tempfile.mkstemp(suffix='.log')[1]
+
+        with CaptureOutputToFile(tmp_dump_file):
+            self._inference(sampling_graph_def)
+        self._calibration_data = Helper.gen_valid_sampling_log(tmp_dump_file)
+
+        del sampling_graph_def
+        import gc
+        gc.collect()
+
+        # Insert QDQ pattern
+        self._tmp_graph_def = GenerateGraphWithQDQPattern(
+              graph_def, self._calibration_data, self.op_wise_config,
+              self.fake_quant, self.fp32_ops, self.bf16_ops, self.quantized_node_info,
+              self.device, self.performance_only, self.itex_mode).do_transformation()
+
+        self._tmp_graph_def, _ = FreezeValueTransformer(
+            self._tmp_graph_def,
+            self._calibration_data,
+            '__max:',
+            self.itex_mode).do_transformation()
+        self._tmp_graph_def, _ = FreezeValueTransformer(
+            self._tmp_graph_def,
+            self._calibration_data,
+            '__min:',
+            self.itex_mode).do_transformation()
+        self._tmp_graph_def, _= FreezeValueTransformer(
+            self._tmp_graph_def,
+            self._calibration_data,
+            '__requant_min_max',
+            tensor_data= {},
+            device=self.device,
+            itex_mode=self.itex_mode).do_transformation()
+
+        self._tmp_graph_def = StripUnusedNodesOptimizer(
+            self._tmp_graph_def,
+            ['attention_mask', 'input_ids'],
+            ['Identity', 'Identity_1']).do_transformation()
+
+        if self.itex_mode:
+            self._tmp_graph_def = ShareQDQForItexYPatternOptimizer(self._tmp_graph_def).do_transformation()
+        self._tmp_graph_def = MergeDuplicatedQDQOptimizer(self._tmp_graph_def).do_transformation()
+
+        return self._tmp_graph_def
+
+    def __call__(self):
         config = tf.compat.v1.ConfigProto()
         config.use_per_session_threads = 1
         config.inter_op_parallelism_threads = 1
 
-        _saved_model = load.load(src, [tag_constants.SERVING])
-        func = _saved_model.signatures[signature_constants.DEFAULT_SERVING_SIGNATURE_DEF_KEY]
+        self._saved_model = load.load(self.src, [tag_constants.SERVING])
+        self.func = self._saved_model.signatures[signature_constants.DEFAULT_SERVING_SIGNATURE_DEF_KEY]
 
-        inlined_graph_def = self._apply_inlining(func)
-        frozen_func = self._construct_function_from_graph_def(func, inlined_graph_def)
+        inlined_graph_def = self._apply_inlining(self.func)
+        # self._annotate_variable_ops(func, inlined_graph_def)
+        self.frozen_func = self._construct_function_from_graph_def(self.func, inlined_graph_def)
 
-        frozen_graph_def = frozen_func.graph.as_graph_def()
+        frozen_graph_def = self.frozen_func.graph.as_graph_def()
         grappler_meta_graph_def = saver.export_meta_graph(
-            graph_def=frozen_graph_def, graph=frozen_func.graph)
+            graph_def=frozen_graph_def, graph=self.frozen_func.graph)
 
         # Add a collection 'train_op' so that Grappler knows the outputs.
         fetch_collection = meta_graph_pb2.CollectionDef()
-        for array in frozen_func.inputs + frozen_func.outputs:
+        for array in self.frozen_func.inputs + self.frozen_func.outputs:
             fetch_collection.node_list.value.append(array.name)
             grappler_meta_graph_def.collection_def["train_op"].CopyFrom(
                 fetch_collection)
@@ -132,21 +284,14 @@ class ConvertSavedModel():
         f=tf.io.gfile.GFile('extracted_graph_def.pb','wb')
         f.write(extracted_graph_def.SerializeToString()) 
 
-        if args.insert_qdq:
-            converted_graph_def = InsertQDQPatternBeforeMatmul(extracted_graph_def).do_transformation()
+        extracted_graph_def = self.inc_preoptimize(extracted_graph_def)
+        print('Start to apply quantization')
+        if self.apply_quantize:
+            converted_graph_def = self.quantize(extracted_graph_def)
         else:
             converted_graph_def = extracted_graph_def
 
         f=tf.io.gfile.GFile('converted_graph_def.pb','wb')
         f.write(converted_graph_def.SerializeToString()) 
-
-        converted_func = self._construct_function_from_graph_def(
-            func, converted_graph_def, frozen_func)
-
-        trackable = _saved_model
-        signatures = {signature_constants.DEFAULT_SERVING_SIGNATURE_DEF_KEY: converted_func}
-        save.save(trackable, dst, signatures, options=None)
-    
-if __name__ == "__main__":
-    converter = ConvertSavedModel()
-    converter(src='./gpt-j-6B', dst='./converted_gpt-j-6B')
+        print('Save Quantized model to ', self.dst)
+        self.reconstruct_saved_model(converted_graph_def)

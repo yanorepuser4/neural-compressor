@@ -10,8 +10,12 @@ This document is used to record the experimental code of modifying unfrozen grap
 
 ### Installation
 ```shell
-# Install Intel® Neural Compressor
-pip install neural-compressor
+# Build Intel® Neural Compressor from source for this branch
+git clone https://github.com/intel/neural-compressor.git
+cd neural_compressor
+git checkout zehao/saved_model_demo
+pip install -r requirements.txt 
+python setup.py install
 ```
 
 ### Install Requirements
@@ -36,62 +40,25 @@ mv ./1 ./gpt-j-6B
  ```
 
 ## 3. Prepare Dataset
-The dataset will be automatically downloaded when runing evaluation.
+The dataset will be automatically downloaded.
 
-# Conversion
-## 1. Convert without inserting qdq
-This step is to verify the graph_def extracted from saved_model can be successfully saved back.
+# Run
 
-The reconstruted model will be saved to './converted_gpt-j-6B'. 
-
-By checking the directory of this saved_model, we can see the variables folder is not empty.
-  ```shell
-  python convert.py
+## 1. Modify Configs(Optional)
+The default configs for quantization is shown below:
+  ```python
+  # whether to apply quantization by following the rules of ITEX
+  self.itex_mode = False
+  # whether to apply aggressive quantization without concerning the accuracy
+  self.performance_only = False
   ```
-When running this script, two pb files will be dumped: ```extracted_graph_def.pb``` and ```converted_graph_def.pb```. 
+Please set them to ```True``` in the ```__init__``` function of the ```ConvertSavedModel``` class in ```convert.py``` if needed.
 
-They represent the graph_def before and after inserting qdq.
-
-Because we didn't insert qdq in this step, they should be the same.
-
-## 2. Run Benchmark 
-This step is to verify the reconstructed saved_model can be inferenced without accuracy drop.
-
+## 2. Quantization
   ```shell
-  python run_benchmark.py --output_dir=./output
+  python quantize.py --output_dir=./output
   ```
-
-The following results are expected to be shown:
-  ```shell
-  ---------------------------------------------------------
-  The infrence results of original gpt-j with TF2.x API
-  Batch size = 8
-  Latency: 54857.059 ms
-  Throughput: 0.018 images/sec
-  ---------------------------------------------------------
-  The infrence results of converted gpt-j with TF2.x API
-  Batch size = 8
-  Latency: 53673.399 ms
-  Throughput: 0.019 images/sec
-  ---------------------------------------------------------
-  MSE of the output logits between two models = 0.0
-  ```
-
-Because it's complicated to rewrite the code of computing accuracy using TF2.x API instead of transformers API, MSE similarity is calculated for the logits outputs between the two models.
-
-A zero MSE  represents that the output of two models are actually equal.
-
-This result proves that the reconstructed model can still be inferenced with correct accuracy.
-
-## 3. Convert with inserting qdq
-This step is to verify the graph_def with inserted qdq can be successfully saved back.
-
-The reconstruted model will be saved to './converted_gpt-j-6B'.
-
-By checking the directory of this saved_model, we can see the variables folder is not empty.
-  ```shell
-  python convert.py --insert_qdq
-  ```
+The quantized model will be saved to './converted_gpt-j-6B'.
 
 When running this script, two pb files will be dumped: ```extracted_graph_def.pb``` and ```converted_graph_def.pb```. 
 
@@ -104,39 +71,65 @@ Because there is a huge number of nodes in this LLM. It's recommended to convert
   ```
 
 The ```converted_graph_def.pb``` will be used as the default file for conversion.
-Using IDE(such as vscode) to open the ```converted_graph_def.pbtxt```. It's easy to see that qdq patterns has been successfully inserted before ```MatMul``` Op.
+Using IDE(such as VScode) to open the ```converted_graph_def.pbtxt```. It's easy to find calibrated qdq nodes before quatzable Op such as ```MatMul``` and ```ConcatV2```.
 
   ```
-     node_def {
-      name: "StatefulPartitionedCall/transformer/h_._0/attn/q_proj/Tensordot/MatMul_eightbit_quantize_StatefulPartitionedCall/transformer/h_._0/attn/q_proj/Tensordot/Reshape"
-      op: "QuantizeV2"
-      input: "StatefulPartitionedCall/transformer/h_._0/attn/q_proj/Tensordot/Reshape:output:0"
-      input: "StatefulPartitionedCall/lm_head/Tensordot/MatMul_eightbit_min_StatefulPartitionedCall/lm_head/Tensordot/Reshape:output:0"
-      input: "StatefulPartitionedCall/lm_head/Tensordot/MatMul_eightbit_max_StatefulPartitionedCall/lm_head/Tensordot/Reshape:output:0"
-      ......
+node {
+  name: "StatefulPartitionedCall/transformer/h_._0/mlp/fc_in/Tensordot/MatMul_eightbit_max_StatefulPartitionedCall/transformer/h_._0/attn/q_proj/Tensordot/Reshape/frozen_max_only"
+  op: "Const"
+  attr {
+    key: "dtype"
+    value {
+      type: DT_FLOAT
+    }
+  }
+  attr {
+    key: "value"
+    value {
+      tensor {
+        dtype: DT_FLOAT
+        tensor_shape {
+        }
+        float_val: 16.84615707397461
       }
-
-    node_def {
-      name: "StatefulPartitionedCall/transformer/h_._0/attn/q_proj/Tensordot/MatMul_dequantize"
-      op: "Dequantize"
-      input: "StatefulPartitionedCall/transformer/h_._0/attn/q_proj/Tensordot/MatMul_eightbit_quantize_StatefulPartitionedCall/transformer/h_._0/attn/q_proj/Tensordot/Reshape:output:0"
-      input: "StatefulPartitionedCall/transformer/h_._0/attn/q_proj/Tensordot/MatMul_eightbit_quantize_StatefulPartitionedCall/transformer/h_._0/attn/q_proj/Tensordot/Reshape:output_min:0"
-      input: "StatefulPartitionedCall/transformer/h_._0/attn/q_proj/Tensordot/MatMul_eightbit_quantize_StatefulPartitionedCall/transformer/h_._0/attn/q_proj/Tensordot/Reshape:output_max:0"
-      ......
     }
+  }
+}
 
-    node_def {
-      name: "StatefulPartitionedCall/transformer/h_._0/attn/q_proj/Tensordot/MatMul"
-      op: "MatMul"
-      input: "StatefulPartitionedCall/transformer/h_._0/attn/q_proj/Tensordot/MatMul_dequantize:output:0"
-      input: "StatefulPartitionedCall/transformer/h_._0/attn/q_proj/Tensordot/ReadVariableOp:value:0"
-      ......
+node {
+  name: "StatefulPartitionedCall/transformer/h_._0/mlp/fc_in/Tensordot/MatMul_eightbit_quantize_StatefulPartitionedCall/transformer/h_._0/attn/q_proj/Tensordot/Reshape"
+  op: "QuantizeV2"
+  input: "StatefulPartitionedCall/transformer/h_._0/attn/q_proj/Tensordot/Reshape"
+  input: "StatefulPartitionedCall/transformer/h_._0/mlp/fc_in/Tensordot/MatMul_eightbit_min_StatefulPartitionedCall/transformer/h_._0/attn/q_proj/Tensordot/Reshape/frozen_min_only"
+  input: "StatefulPartitionedCall/transformer/h_._0/mlp/fc_in/Tensordot/MatMul_eightbit_max_StatefulPartitionedCall/transformer/h_._0/attn/q_proj/Tensordot/Reshape/frozen_max_only"
+  attr {
+    key: "T"
+    value {
+      type: DT_QUINT8
     }
+  }
+  ......
+}
+
+node {
+  name: "StatefulPartitionedCall/transformer/h_._0/attn/q_proj/Tensordot/MatMul_dequantize"
+  op: "Dequantize"
+  input: "StatefulPartitionedCall/transformer/h_._0/mlp/fc_in/Tensordot/MatMul_eightbit_quantize_StatefulPartitionedCall/transformer/h_._0/attn/q_proj/Tensordot/Reshape"
+  input: "StatefulPartitionedCall/transformer/h_._0/mlp/fc_in/Tensordot/MatMul_eightbit_quantize_StatefulPartitionedCall/transformer/h_._0/attn/q_proj/Tensordot/Reshape:1"
+  input: "StatefulPartitionedCall/transformer/h_._0/mlp/fc_in/Tensordot/MatMul_eightbit_quantize_StatefulPartitionedCall/transformer/h_._0/attn/q_proj/Tensordot/Reshape:2"
+  ......
+}
+
+node {
+  name: "StatefulPartitionedCall/transformer/h_._0/attn/q_proj/Tensordot/MatMul"
+  op: "MatMul"
+  input: "StatefulPartitionedCall/transformer/h_._0/attn/q_proj/Tensordot/MatMul_dequantize"
+  input: "StatefulPartitionedCall/transformer/h_._0/attn/q_proj/Tensordot/ReadVariableOp__dequant"
+  ......
+}
   ```
 
-## 4. Run Benchmark 
-This step is to verify the model inserted qdq can be inferenced. And there should be significant accuracy change becuase the calibration is not done. The min-max value of qdq is fixed to be -1 and 1.
-
+## 2. Run Benchmark 
   ```shell
   python run_benchmark.py --output_dir=./output
   ```
@@ -161,7 +154,9 @@ Because it's complicated to rewrite the code of computing accuracy using TF2.x A
 
 A none-zero MSE represents that the output of two models are not equal(accuracy changed).
 
-This proves that the qdq pattern has been successfully inserted, and the saved_model can still be inferenced.
+```
+WIP: Rewrite the code of computing accuracy using TF2.x API instead of transformers API.
+```
 
 ## 5. Dump Graph
 We can also dump graph from the saved_model to check if the conversion is successful:

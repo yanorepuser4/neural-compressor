@@ -214,29 +214,11 @@ def evaluate(path):
 
     return latency, results
 
-def main(): 
-    latency1, results1 = evaluate('./gpt-j-6B')
-    latency2, results2 = evaluate('./converted_gpt-j-6B')
-
-    mse_list = []
-    for i in range(0, len(results1)):
-        mse = tf.reduce_mean(tf.square(results1[i]['logits']-results2[i]['logits'])).numpy()
-        mse_list.append(mse)
-    similarity = np.array(mse_list).mean()
-
-    print('---------------------------------------------------------')
-    print('The infrence results of original gpt-j with TF2.x API')
-    print("Batch size = {}".format(8))
-    print("Latency: {:.3f} ms".format(latency1 * 1000))
-    print("Throughput: {:.3f} images/sec".format(1. / latency1))
-    print('---------------------------------------------------------')
-    print('The infrence results of converted gpt-j with TF2.x API')
-    print("Batch size = {}".format(8))
-    print("Latency: {:.3f} ms".format(latency2 * 1000))
-    print("Throughput: {:.3f} images/sec".format(1. / latency2))
-    print('---------------------------------------------------------')
-    print("MSE of the output logits between two models = {}".format(similarity)) 
-
+def main():    
+    from convert import ConvertSavedModel
+    converter = ConvertSavedModel(src='./gpt-j-6B', dst='./converted_gpt-j-6B', 
+                                                quantize=True, evaluate=evaluate)
+    converter()
 
 if __name__ == "__main__":
     main()
