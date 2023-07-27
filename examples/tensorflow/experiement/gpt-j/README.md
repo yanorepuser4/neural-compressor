@@ -1,7 +1,7 @@
 Step-by-Step
 ============
 
-This document is used to record the experimental code of modifying unfrozen graph_def, which is extracted from saved_model, and saving back.
+This document serves as a guidence of quantizing GPT-J with Intel® Neural Compressor.
 
 
 # Prerequisite
@@ -129,7 +129,7 @@ node {
 }
   ```
 
-## 2. Run Benchmark 
+## 3. Run Benchmark 
   ```shell
   python run_benchmark.py --output_dir=./output
   ```
@@ -159,7 +159,7 @@ A none-zero MSE represents that the output of two models are not equal(accuracy 
 WIP: Rewrite the code of computing accuracy using TF2.x API instead of transformers API.
 ```
 
-## 5. Dump Graph
+## 4. Dump Graph(Optional)
 We can also dump graph from the saved_model to check if the conversion is successful:
 
   ```shell
