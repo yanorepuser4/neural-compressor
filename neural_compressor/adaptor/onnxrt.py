@@ -195,11 +195,12 @@ class ONNXRUNTIMEAdaptor(Adaptor):
         self.cur_sq_args['op_types'] = op_types
         self.cur_sq_args['scales_per_op'] = scales_per_op
         self.cur_sq_args['calib_iter'] = iterations
-
+        
         # pre-optimization -> sq
         self._pre_optimize(model)
         # assign the algo to the adaptor, so adaptor can call it later when needed
         self.sq = ORTSmoothQuant(self.pre_optimized_model, dataloader, self.reduce_range, self.backend)
+        # self.sq.record_max_info = record_max_info
         self.smooth_quant_model = self.sq.transform(**self.cur_sq_args)
         logger.info("Updated the pre-optimized model with smooth quant model.")
         # TODO double-check the smooth_quant_model and pre_optimized_model to make sure there no two fp32 model replicas
@@ -235,9 +236,11 @@ class ONNXRUNTIMEAdaptor(Adaptor):
         # two steps to re-smooth the model if needed
         if self._need_smooth_quant(tune_cfg):
             # step1. recover the sq to original fp32 model
-            self.sq.recover()
+            # self.sq.recover()
             # step2. re-smooth the model with new alpha
             self.smooth_quant_model = self.sq.transform(**self.cur_sq_args)
+
+        # if self.sq is not None
         
         assert q_func is None, "quantization aware training has not been supported on ONNXRUNTIME"
         if self.smooth_quant_model is not None:

@@ -122,6 +122,7 @@ class ORTSmoothQuant:
         self.tensors_to_node = {}
         self.replace_input = []
         self.ops_to_absorb = []
+        self.record_max_info = False
         self._build_absorb_function()
         
     def transform(self, alpha=0.5, folding=True, percentile=99.999, op_types=['Gemm', 'Conv', 'MatMul', 'FusedConv'],
@@ -143,6 +144,8 @@ class ORTSmoothQuant:
             A FP32 model with the same architecture as the orig model but with different weight which will be
             benefit to quantization
         """
+        self.recover()
+        print('sq transformer', alpha, folding, percentile, op_types, scales_per_op, calib_iter)
         if isinstance(alpha, float) and (alpha < 0 or alpha > 1):
             logger.warning("alpha should be a float value in [0, 1] or 'auto' ")
             if alpha < 0:
@@ -159,7 +162,13 @@ class ORTSmoothQuant:
             if alpha == 'auto':
                 alpha = self._auto_tune_alpha(calib_iter, **auto_alpha_args)
 
+        # if self.record_max_info: # double check
+        #     self.model._smoothquant_optimized = False
+        #     return self.model
+
         scales = self._get_smooth_scales(alpha)
+        # scales['MatMul_177']
+        import pdb;pdb.set_trace()
         self._insert_smooth_mul_op(scales)
         self._adjust_weights(scales)
 
@@ -178,6 +187,8 @@ class ORTSmoothQuant:
 
     def recover(self):
         """Recover the model weights."""
+        if len(self.tensors_to_node) != 0:
+            print('recover')
         for tensor_name, nodes in self.tensors_to_node.items():
             for node_info in nodes:
                 key = node_info[0] if self.scales_per_op else tensor_name
@@ -206,6 +217,8 @@ class ORTSmoothQuant:
         self.new_added_mul_nodes = []
         self.new_init_tensors = []
         self.new_added_value_info = []
+        self.replace_input = []
+        # self.tensors_to_node = {}
 
     def _check_need_calibration(self, alpha, percentile, op_types, scales_per_op, calib_iter):
         """Check need calibration or not.
