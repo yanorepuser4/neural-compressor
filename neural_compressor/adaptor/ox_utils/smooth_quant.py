@@ -27,6 +27,7 @@ from neural_compressor.model.onnx_model import ONNXModel
 from neural_compressor.adaptor.ox_utils.util import to_numpy, \
                     quantize_data, _get_qrange_for_qType, is_B_transposed
 from onnx import numpy_helper, helper
+from collections import Counter
 
 logger = logging.getLogger("neural_compressor")
 
@@ -158,9 +159,10 @@ class ORTSmoothQuant:
             if alpha == 'auto':
                 alpha = self._auto_tune_alpha(calib_iter, **auto_alpha_args)
 
-            scales = self._get_smooth_scales(alpha)
-            self._insert_smooth_mul_op(scales)
-            self._adjust_weights(scales)
+        scales = self._get_smooth_scales(alpha)
+        self._insert_smooth_mul_op(scales)
+        self._adjust_weights(scales)
+
         self.model.add_nodes(self.new_added_mul_nodes)
         self.model.model.graph.value_info.extend(self.new_added_value_info)
         self.model.add_initializers(self.new_init_tensors)
@@ -189,9 +191,11 @@ class ORTSmoothQuant:
                 scale = self.tensor_scales_info[key]
                 new_weight = weight * scale
                 self.model.set_initializer(input, new_weight)
-
+        
         for node, old_input_name, new_input_name in self.replace_input:
-            self.model.replace_node_input(node, new_input_name, old_input_name)
+            for replace_node in self.model.model.graph.node:
+                if replace_node.name == node.name:
+                    self.model.replace_node_input(replace_node, new_input_name, old_input_name)
 
         for value_info in self.new_added_value_info:
             self.model.model.graph.value_info.remove(value_info)

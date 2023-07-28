@@ -38,6 +38,7 @@ import math
 import sys
 import re
 from typing import Dict
+from collections import Counter
 
 onnx = LazyImport("onnx")
 ort = LazyImport("onnxruntime")
@@ -160,7 +161,7 @@ class ONNXRUNTIMEAdaptor(Adaptor):
 
         # sq algo and args
         self.sq = None
-        self.cur_sq_args = None
+        self.cur_sq_args = {}
 
     def smooth_quant(self, model, dataloader, iterations, alpha=0.5, folding=True,
             percentile=99.999, op_types=['MatMul', 'Gemm', 'Conv', 'FusedConv'],
@@ -186,14 +187,20 @@ class ONNXRUNTIMEAdaptor(Adaptor):
             return self.smooth_quant_model
 
         from .ox_utils.smooth_quant import ORTSmoothQuant
-        # TODO remove quantize_config as it no consumer
-        quantize_config = None
+
+        # set params to cur_sq_args
+        self.cur_sq_args['alpha'] = alpha
+        self.cur_sq_args['folding'] = folding
+        self.cur_sq_args['percentile'] = percentile
+        self.cur_sq_args['op_types'] = op_types
+        self.cur_sq_args['scales_per_op'] = scales_per_op
+        self.cur_sq_args['calib_iter'] = iterations
+
         # pre-optimization -> sq
         self._pre_optimize(model)
         # assign the algo to the adaptor, so adaptor can call it later when needed
         self.sq = ORTSmoothQuant(self.pre_optimized_model, dataloader, self.reduce_range, self.backend)
-        self.smooth_quant_model = self.sq.transform(
-            alpha, folding, percentile, op_types, scales_per_op, iterations, quantize_config)
+        self.smooth_quant_model = self.sq.transform(**self.cur_sq_args)
         logger.info("Updated the pre-optimized model with smooth quant model.")
         # TODO double-check the smooth_quant_model and pre_optimized_model to make sure there no two fp32 model replicas
         self.pre_optimized_model = self.smooth_quant_model
@@ -201,14 +208,14 @@ class ONNXRUNTIMEAdaptor(Adaptor):
     
     def _need_smooth_quant(self, tune_cfg) -> bool:
         # compare the alpha from tune_cfg and current alpha to decide whether re-smooth model or not
-        # TODO
-        return False
-    
-    def _parse_sq_args(self, tune_cfg, cur_sq_args) -> Dict:
-        # parse the sq args according to the tune cfg and current sq args
-        # TODO
-        return {}
-        
+        new_sq_alpha = tune_cfg['recipe_cfgs']['smooth_quant_args']['alpha']
+        if new_sq_alpha != self.cur_sq_args['alpha']:
+            self.smooth_quant_model = None
+            # update alpha
+            self.cur_sq_args['alpha'] = new_sq_alpha
+            return True
+        else:
+            return False
 
     @dump_elapsed_time("Pass quantize model")
     def quantize(self, tune_cfg, model, data_loader, q_func=None):
@@ -229,10 +236,9 @@ class ONNXRUNTIMEAdaptor(Adaptor):
         if self._need_smooth_quant(tune_cfg):
             # step1. recover the sq to original fp32 model
             self.sq.recover()
-            new_sq_args = self._parse_sq_args(tune_cfg, self.cur_sq_args)
             # step2. re-smooth the model with new alpha
-            model = self.smooth_quant(model=model, dataloader=data_loader, iterations=new_sq_args['iterations'],\
-                alpha=new_sq_args['alpha'], folding=new_sq_args['folding'], scales_per_op=new_sq_args['scales_per_op'])
+            self.smooth_quant_model = self.sq.transform(**self.cur_sq_args)
+        
         assert q_func is None, "quantization aware training has not been supported on ONNXRUNTIME"
         if self.smooth_quant_model is not None:
             model = self.smooth_quant_model
