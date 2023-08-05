@@ -967,6 +967,7 @@ class TuneStrategy(metaclass=TuneStrategyMeta):
             return
         else:
             # If needed, push off the baseline evaluation until the diagnosis is finished.
+            self.baseline = [0, [0, 0]]
             if self._need_do_diagnosis():
                 logger.info("Push off the baseline evaluation until the diagnosis is finished.")
                 return
