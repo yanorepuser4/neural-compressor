@@ -737,7 +737,7 @@ def main():
         from neural_compressor.config import PostTrainingQuantConfig, TuningCriterion
         conf = PostTrainingQuantConfig(
             approach="static", 
-            precision="fp8_e3m4"
+            precision="fp8_e3m4",
             calibration_sampling_size=[300],
         )
         q_model = fit(model_args.output_model, conf=conf, calib_dataloader=dataloader, eval_func=eval_func)
