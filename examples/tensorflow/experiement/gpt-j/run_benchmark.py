@@ -170,8 +170,8 @@ class Inference():
         start = time.time()
         model_outputs = self.infer(**model_inputs)
         end = time.time()
-        self.dur = end - start
 
+        self.dur = end - start
         next_token_logits = model_outputs['logits'][:, -1]
 
         # pre-process distribution
@@ -215,7 +215,7 @@ class Inference():
 
         # 2-to-n generation steps can then be run in autoregressive fashion
         # only in case 1st generation step does NOT yield EOS token though
-        maximum_iterations = self.max_new_tokens
+        maximum_iterations = 0
         generated, _, cur_len, _ = tf.while_loop(
             self.greedy_search_cond_fn,
             self.greedy_search_body_fn,
@@ -236,13 +236,14 @@ class Inference():
         for idx, data in enumerate(tf_eval_dataset):
             print('Running Iteration: ', idx)
             predictions = self.generate(data)
+            
             if data[-1] == predictions[0][-1].numpy():
                 correct+=1
                 print('The answer is correct')
             else:
                 print('The answer is incorrect')
-            latency_list.append(self.dur)
             print('Time taken: ', self.dur)
+            latency_list.append(self.dur)
             if iteration and idx >= iteration:
                 break
         latency = np.array(latency_list[warmup:]).mean() / 1
@@ -293,6 +294,7 @@ def main():
         inference = Inference()
         latency1, acc1 = inference.evaluate('./gpt-j-6B', mydata)
         latency2, acc2 = inference.evaluate('./converted_gpt-j-6B', mydata)
+
         print('---------------------------------------------------------')
         print('The infrence results of original gpt-j with TF2.x API')
         print("Batch size = {}".format(1))
