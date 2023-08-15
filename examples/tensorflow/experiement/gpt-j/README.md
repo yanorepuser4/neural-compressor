@@ -138,25 +138,16 @@ The following results are expected to be shown:
 ```shell
 ---------------------------------------------------------
 The infrence results of original gpt-j with TF2.x API
-Batch size = 8
-Latency: 54790.604 ms
-Throughput: 0.018 images/sec
+Batch size = 1
+Accuracy: 78.218%
+Latency: 1195.945 ms
+Throughput: 0.836 samples/sec
 ---------------------------------------------------------
 The infrence results of converted gpt-j with TF2.x API
-Batch size = 8
-Latency: 35146.368 ms
-Throughput: 0.028 images/sec
----------------------------------------------------------
-MSE of the output logits between two models = 7.117039203643799
-
-```
-
-Because it's complicated to rewrite the code of computing accuracy using TF2.x API instead of transformers API, MSE similarity is calculated for the logits outputs between the two models.
-
-A none-zero MSE represents that the output of two models are not equal(accuracy changed).
-
-```
-WIP: Rewrite the code of computing accuracy using TF2.x API instead of transformers API.
+Batch size = 1
+Accuracy: 77.228%
+Latency: 1404.469 ms
+Throughput: 0.712 samples/sec
 ```
 
 ## 4. Dump Graph(Optional)

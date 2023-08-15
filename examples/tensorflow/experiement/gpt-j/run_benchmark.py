@@ -1,4 +1,41 @@
+#
+# -*- coding: utf-8 -*-
+#
+# Copyright (c) 2023 Intel Corporation
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+#
+
+#!/usr/bin/env python
+# coding=utf-8
+# Copyright 2021 The HuggingFace Inc. team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import logging
+import math
 from dataclasses import dataclass, field
 from itertools import chain
 from typing import Optional
@@ -7,6 +44,8 @@ import numpy as np
 import datasets
 import tensorflow as tf
 from datasets import load_dataset
+from sklearn.model_selection import train_test_split
+from collections import defaultdict
 
 import transformers
 from transformers import (
@@ -20,8 +59,9 @@ from transformers import (
 )
 from transformers.utils.versions import require_version
 
+
 logger = logging.getLogger(__name__)
-require_version("datasets>=1.8.0", "To fix: pip install -r examples/tensorflow/language-modeling/requirements.txt")
+require_version("datasets>=1.8.0", "To fix: pip install -r benchmarks/language_modeling/tensorflow/gpt_j/requirements.txt")
 MODEL_CONFIG_CLASSES = list(TF_MODEL_FOR_CAUSAL_LM_MAPPING.keys())
 MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
 
@@ -89,8 +129,127 @@ class DataTrainingArguments:
         default=None,
         metadata={"help": "The number of processes to use for the preprocessing."},
     )
+    
+class Inference():
+    def __init__(self) -> None:
+        self.dur = 0
+        self.infer = None
+        self.batch_size = 1
+        self.max_new_tokens = 1
 
-def prepare_dataset():
+    def prepare_attention_mask_for_generation(
+        self,
+        inputs: tf.Tensor,
+        pad_token_id=50256,
+        eos_token_id=50256,
+    ) -> tf.Tensor:
+        is_input_ids = len(inputs.shape) == 2 and inputs.dtype in (tf.int32, tf.int64)
+        is_pad_token_in_inputs = (pad_token_id is not None) and tf.math.reduce_any(inputs == pad_token_id)
+        is_pad_token_not_equal_to_eos_token_id = (eos_token_id is None) or (pad_token_id != eos_token_id)
+
+        # Check if input is input_ids and padded -> only then is attention_mask defined
+        if is_input_ids and is_pad_token_in_inputs and is_pad_token_not_equal_to_eos_token_id:
+            return tf.cast(tf.math.not_equal(inputs, pad_token_id), dtype=tf.int32)
+        else:
+            return tf.ones(inputs.shape[:2], dtype=tf.int32)
+
+    def greedy_search_cond_fn(self, generated, finished_sequences, cur_len, model_kwargs):
+        """state termination condition fn."""
+        return ~tf.reduce_all(finished_sequences)
+
+        # define condition fn
+    def greedy_search_body_fn(self, generated, finished_sequences, cur_len, model_kwargs):
+        """state update fn."""
+        if model_kwargs.get("past_key_values") is None:
+            input_ids = generated[:, :cur_len]
+        else:
+            input_ids = tf.expand_dims(generated[:, cur_len - 1], -1)
+
+        model_inputs = {'input_ids': input_ids, 'attention_mask': model_kwargs['attention_mask']}
+
+        start = time.time()
+        model_outputs = self.infer(**model_inputs)
+        end = time.time()
+        self.dur = end - start
+
+        next_token_logits = model_outputs['logits'][:, -1]
+
+        # pre-process distribution
+        next_tokens_scores = next_token_logits
+
+        # argmax
+        next_tokens = tf.argmax(next_tokens_scores, axis=-1, output_type=tf.int32)
+
+        pad_token_id = 50256
+        eos_token_id = [50256]
+
+        unfinished_seq = 1 - tf.cast(finished_sequences, tf.int32)
+        next_tokens = next_tokens * unfinished_seq + pad_token_id * (1 - unfinished_seq)
+        next_token_is_eos = tf.math.reduce_any(
+            tf.equal(
+                tf.broadcast_to(next_tokens, (len(eos_token_id), self.batch_size)), tf.expand_dims(eos_token_id, -1)
+            ),
+            axis=0,
+        )
+        finished_sequences = finished_sequences | next_token_is_eos
+
+        # update `generated` and `cur_len`
+        update_indices = tf.stack([tf.range(self.batch_size), tf.broadcast_to(cur_len, [self.batch_size])], axis=-1)
+        generated = tf.tensor_scatter_nd_update(tensor=generated, indices=update_indices, updates=next_tokens)
+        cur_len += 1
+
+        return generated, finished_sequences, cur_len, model_kwargs
+
+    def generate(self, data):
+        input_ids = tf.convert_to_tensor([data[:-1]], dtype=tf.int32)
+        pad_token_id = 50256
+        cur_len = len(data)-1
+        input_ids_padding = tf.ones((self.batch_size, 1), dtype=tf.int32) * (pad_token_id or 0)
+        generated = tf.concat([input_ids, input_ids_padding], axis=-1)
+        model_kwargs = {'attention_mask': self.prepare_attention_mask_for_generation(input_ids)}
+        finished_sequences = tf.convert_to_tensor([False])
+        # 1st generation step has to be run before to initialize `past_key_values`
+        generated, finished_sequences, cur_len, model_kwargs = self.greedy_search_body_fn(
+            generated, finished_sequences, cur_len, model_kwargs
+        )
+
+        # 2-to-n generation steps can then be run in autoregressive fashion
+        # only in case 1st generation step does NOT yield EOS token though
+        maximum_iterations = self.max_new_tokens
+        generated, _, cur_len, _ = tf.while_loop(
+            self.greedy_search_cond_fn,
+            self.greedy_search_body_fn,
+            (generated, finished_sequences, cur_len, model_kwargs),
+            maximum_iterations=maximum_iterations,
+        )
+
+        return generated
+
+    def evaluate(self, path, tf_eval_dataset):
+        model = tf.saved_model.load(path)
+        self.infer = model.signatures["serving_default"]
+        warmup = 5
+        iteration = None
+        latency_list = []
+        iteration = 100
+        correct = 0
+        for idx, data in enumerate(tf_eval_dataset):
+            print('Running Iteration: ', idx)
+            predictions = self.generate(data)
+            if data[-1] == predictions[0][-1].numpy():
+                correct+=1
+                print('The answer is correct')
+            else:
+                print('The answer is incorrect')
+            latency_list.append(self.dur)
+            print('Time taken: ', self.dur)
+            if iteration and idx >= iteration:
+                break
+        latency = np.array(latency_list[warmup:]).mean() / 1
+        acc = correct/(iteration+1)
+        return latency, acc
+
+def main():
     parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TFTrainingArguments))
     model_args, data_args, run_args = parser.parse_args_into_dataclasses()
 
@@ -100,6 +259,7 @@ def prepare_dataset():
     
     if run_args.seed is not None:
         set_seed(run_args.seed)
+
     
     raw_datasets = load_dataset(
             data_args.dataset_name,
@@ -114,129 +274,37 @@ def prepare_dataset():
     column_names = raw_datasets["test"].column_names
     text_column_name = "text" if "text" in column_names else column_names[0]
 
-    def tokenize_function(examples):
-        return tokenizer(examples[text_column_name])
+    mydata = tokenizer(raw_datasets["test"][text_column_name], return_tensors="np").input_ids
 
-    tokenized_datasets = raw_datasets.map(
-        tokenize_function,
-        batched=True,
-        num_proc=data_args.preprocessing_num_workers,
-        remove_columns=column_names,
-        load_from_cache_file=True,
-        desc="Running tokenizer on dataset",
-    )
+    marg = {}
+    stacked = np.concatenate(mydata)
+    unique, counts = np.unique(stacked, return_counts=True)
+    counts = counts / np.sum(counts)
 
-    print("Tokenized Dataset:")
-    print(tokenized_datasets["test"])
-    L = []
-    for x in tokenized_datasets["test"]:
-        L.append(len(x['input_ids']))
-    
-    print("MAX = ", np.max(np.array(L)) )
-
-    block_size = tokenizer.model_max_length
-    if block_size > 1024:
-        logger.warning(
-                f"The tokenizer picked seems to have a very large `model_max_length` ({tokenizer.model_max_length}). "
-                "Picking 1024 instead. You can change that default value by passing --block_size xxx."
-            )
-        block_size = 1024
-
-    def group_texts(examples):
-        concatenated_examples = {k: list(chain(*examples[k])) for k in examples.keys()}
-        total_length = len(concatenated_examples[list(examples.keys())[0]])
-        if total_length >= block_size:
-            total_length = (total_length // block_size) * block_size
-        result = {
-            k: [t[i : i + block_size] for i in range(0, total_length, block_size)]
-            for k, t in concatenated_examples.items()
-        }
-        result["labels"] = result["input_ids"].copy()
-        return result
-
-    
-    lm_datasets = tokenized_datasets.map(
-        group_texts,
-        batched=True,
-        num_proc=data_args.preprocessing_num_workers,
-        load_from_cache_file=True,
-        desc=f"Grouping texts in chunks of {block_size}",
-    )
-
-    eval_dataset = lm_datasets["test"]
+    marg = dict(zip(unique, counts))
+    marg = defaultdict(lambda: 0, marg)
 
     with run_args.strategy.scope():
         model = TFAutoModelForCausalLM.from_pretrained(model_args.model_name_or_path, config=config)
-        embeddings = model.get_input_embeddings()
-
-        if hasattr(embeddings, "embeddings"):
-            embedding_size = embeddings.embeddings.shape[0]
-        else:
-            embedding_size = embeddings.weight.shape[0]
-        if len(tokenizer) > embedding_size:
-            model.resize_token_embeddings(len(tokenizer))
         
-        num_replicas = run_args.strategy.num_replicas_in_sync
         options = tf.data.Options()
         options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.OFF
-
-        tf_eval_dataset = model.prepare_tf_dataset(
-            eval_dataset,
-            shuffle=False,
-            batch_size=num_replicas * run_args.per_device_eval_batch_size,
-            drop_remainder=True,
-        ).with_options(options)
-
-        return tf_eval_dataset
-
-tf_eval_dataset = prepare_dataset()
-
-def evaluate(path):
-    model = tf.saved_model.load(path)
-    infer = model.signatures["serving_default"]
-    warmup = 1
-    iteration = None
-    latency_list = []
-    iteration = 5
-    results = []
-    for idx, data in enumerate(tf_eval_dataset):
-        inputs = data[0]
-        for name in inputs:
-            inputs[name] = tf.cast(inputs[name], tf.int32)
-        start = time.time()
-        predictions = infer(**inputs)
-        end = time.time()
-        results.append(predictions)
-        latency_list.append(end - start)
-        if iteration and idx >= iteration:
-            break
-    latency = np.array(latency_list[warmup:]).mean() / 1
-
-    return latency, results
-
-def main(): 
-    latency1, results1 = evaluate('./gpt-j-6B')
-    latency2, results2 = evaluate('./converted_gpt-j-6B')
-
-    mse_list = []
-    for i in range(0, len(results1)):
-        mse = tf.reduce_mean(tf.square(results1[i]['logits']-results2[i]['logits'])).numpy()
-        mse_list.append(mse)
-    similarity = np.array(mse_list).mean()
-
-    print('---------------------------------------------------------')
-    print('The infrence results of original gpt-j with TF2.x API')
-    print("Batch size = {}".format(8))
-    print("Latency: {:.3f} ms".format(latency1 * 1000))
-    print("Throughput: {:.3f} images/sec".format(1. / latency1))
-    print('---------------------------------------------------------')
-    print('The infrence results of converted gpt-j with TF2.x API')
-    print("Batch size = {}".format(8))
-    print("Latency: {:.3f} ms".format(latency2 * 1000))
-    print("Throughput: {:.3f} images/sec".format(1. / latency2))
-    print('---------------------------------------------------------')
-    print("MSE of the output logits between two models = {}".format(similarity)) 
-
+        
+        inference = Inference()
+        latency1, acc1 = inference.evaluate('./gpt-j-6B', mydata)
+        latency2, acc2 = inference.evaluate('./converted_gpt-j-6B', mydata)
+        print('---------------------------------------------------------')
+        print('The infrence results of original gpt-j with TF2.x API')
+        print("Batch size = {}".format(1))
+        print("Accuracy: {:.3f}%".format(acc1*100))
+        print("Latency: {:.3f} ms".format(latency1 * 1000))
+        print("Throughput: {:.3f} samples/sec".format(1. / latency1))
+        print('---------------------------------------------------------')
+        print('The infrence results of converted gpt-j with TF2.x API')
+        print("Batch size = {}".format(1))
+        print("Accuracy: {:.3f}%".format(acc2*100))
+        print("Latency: {:.3f} ms".format(latency2 * 1000))
+        print("Throughput: {:.3f} samples/sec".format(1. / latency2))
 
 if __name__ == "__main__":
     main()

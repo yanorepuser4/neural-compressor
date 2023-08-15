@@ -1,3 +1,4 @@
+import os
 import tensorflow as tf
 from tensorflow.python.eager import context
 from tensorflow.python.saved_model import load
@@ -5,6 +6,7 @@ from tensorflow.python.saved_model import tag_constants
 from tensorflow.python.saved_model import signature_constants
 from tensorflow.python.training import saver
 from tensorflow.core.protobuf import config_pb2
+from tensorflow.core.framework import graph_pb2
 from tensorflow.python.grappler import tf_optimizer
 from tensorflow.core.protobuf import meta_graph_pb2
 from tensorflow.python.eager import context
@@ -22,7 +24,10 @@ from tensorflow.python.saved_model import save
 from configs import op_wise_config, int8_sequences
 
 class ConvertSavedModel():
-    def __init__(self, src='./gpt-j-6B', dst='./converted_gpt-j-6B', quantize=False, evaluate=None):
+    def __init__(self, src='./gpt-j-6B', 
+                 dst='./converted_gpt-j-6B', 
+                 quantize=False, evaluate=None, 
+                 op_wise_config={}, int8_sequences={}):
         self.src = src
         self.dst = dst
         self.fp32_ops = []
@@ -189,6 +194,9 @@ class ConvertSavedModel():
         if self.itex_mode:
             self.quantized_node_info.extend(self._search_y_pattern_for_itex(graph_def))
 
+        if not self.quantized_node_info:
+            return graph_def
+
         print('Start to do calibration')
         # Calibration using sampling model
         sampling_graph_def = copy.deepcopy(graph_def)
@@ -222,21 +230,29 @@ class ConvertSavedModel():
               graph_def, self._calibration_data, self.op_wise_config,
               self.fake_quant, self.fp32_ops, self.bf16_ops, self.quantized_node_info,
               self.device, self.performance_only, self.itex_mode).do_transformation()
-
+        
+        threshold = 0.75
+        scaler = 0.75
         self._tmp_graph_def, _ = FreezeValueTransformer(
             self._tmp_graph_def,
             self._calibration_data,
             '__max:',
-            self.itex_mode).do_transformation()
+            self.itex_mode,
+            th=threshold,
+            scaler=scaler).do_transformation()
         self._tmp_graph_def, _ = FreezeValueTransformer(
             self._tmp_graph_def,
             self._calibration_data,
             '__min:',
-            self.itex_mode).do_transformation()
+            self.itex_mode,
+            th=threshold,
+            scaler=scaler).do_transformation()
         self._tmp_graph_def, _= FreezeValueTransformer(
             self._tmp_graph_def,
             self._calibration_data,
             '__requant_min_max',
+            th=threshold,
+            scaler=scaler,
             tensor_data= {},
             device=self.device,
             itex_mode=self.itex_mode).do_transformation()

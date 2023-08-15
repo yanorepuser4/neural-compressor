@@ -449,7 +449,8 @@ class GenerateGraphWithQDQPattern(GraphRewriterBase):
                                             min_max_values,
                                             per_channel,
                                             weight_bit=7.0,
-                                            device='cpu'):
+                                            device='cpu',
+                                            scaler=0.75):
         """Insert QDQ pattern for weight node."""
         host_op_type = computational_node.op
         base_name = weight_node.name + "_"
@@ -503,6 +504,9 @@ class GenerateGraphWithQDQPattern(GraphRewriterBase):
                 # qint8_tensor = np.clip(qint8_tensor, -127, 127).astype(np.int8)
                 min_value = -range_value
                 max_value = range_value
+        elif weight_node.op == 'ReadVariableOp':
+            min_value = np.min(min_max_values[weight_node.name+'__min'])*scaler
+            max_value = np.max(min_max_values[weight_node.name+'__max'])*scaler
         elif host_op_type == "DepthwiseConv2dNative":
             float_tensor = tensor_util.MakeNdarray(weight_node.attr["value"].tensor)
             # get the max values based on dim 0 and 1 for depthwise conv

@@ -30,7 +30,7 @@ import re
 
 class FreezeValueTransformer(GraphRewriterBase):
     """Freeze Value with calibration."""
-    def __init__(self, model, max_min_data, postfix, tensor_data=None, th=1, device='gpu', itex_mode=False):
+    def __init__(self, model, max_min_data, postfix, tensor_data=None, th=1, device='gpu', itex_mode=False, scaler=1):
         """Free Max/Min value into QuantizeV2 op.
 
         Args:
@@ -51,6 +51,7 @@ class FreezeValueTransformer(GraphRewriterBase):
             self.logger.warning("The threshold value for clipping is invalid, " \
                                 "Reset it to 0.95 by default.")
             self.threshold = 0.95
+        self.scaler = scaler
         self.postfix = postfix
         self.device = device
         self.itex_mode = itex_mode
@@ -192,7 +193,7 @@ class FreezeValueTransformer(GraphRewriterBase):
                 attr_value_pb2.AttrValue(type=dtypes.float32.as_datatype_enum))
             new_node.attr["value"].CopyFrom(
                 attr_value_pb2.AttrValue(
-                    tensor=tensor_util.make_tensor_proto(float(value),
+                    tensor=tensor_util.make_tensor_proto(float(value)*self.scaler,
                     dtypes.float32, [])))
             output_node_name = self.graph_info[node_name].outputs[0]
 
@@ -269,7 +270,7 @@ class FreezeValueTransformer(GraphRewriterBase):
                 attr_value_pb2.AttrValue(type=dtypes.float32.as_datatype_enum))
             min_node.attr["value"].CopyFrom(
                 attr_value_pb2.AttrValue(
-                    tensor=tensor_util.make_tensor_proto(float(value[0]),
+                    tensor=tensor_util.make_tensor_proto(float(value[0])*self.scaler,
                     dtypes.float32, [])))
 
             max_node = node_def_pb2.NodeDef()
@@ -285,7 +286,7 @@ class FreezeValueTransformer(GraphRewriterBase):
                 attr_value_pb2.AttrValue(type=dtypes.float32.as_datatype_enum))
             max_node.attr["value"].CopyFrom(
                 attr_value_pb2.AttrValue(
-                    tensor=tensor_util.make_tensor_proto(float(value[1]),
+                    tensor=tensor_util.make_tensor_proto(float(value[1])*self.scaler,
                     dtypes.float32, [])))
 
             if bn_node_name:

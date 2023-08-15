@@ -1,4 +1,41 @@
+#
+# -*- coding: utf-8 -*-
+#
+# Copyright (c) 2023 Intel Corporation
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+#
+
+#!/usr/bin/env python
+# coding=utf-8
+# Copyright 2021 The HuggingFace Inc. team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import logging
+import math
 from dataclasses import dataclass, field
 from itertools import chain
 from typing import Optional
@@ -7,6 +44,8 @@ import numpy as np
 import datasets
 import tensorflow as tf
 from datasets import load_dataset
+from sklearn.model_selection import train_test_split
+from collections import defaultdict
 
 import transformers
 from transformers import (
@@ -20,8 +59,9 @@ from transformers import (
 )
 from transformers.utils.versions import require_version
 
+
 logger = logging.getLogger(__name__)
-require_version("datasets>=1.8.0", "To fix: pip install -r examples/tensorflow/language-modeling/requirements.txt")
+require_version("datasets>=1.8.0", "To fix: pip install -r benchmarks/language_modeling/tensorflow/gpt_j/requirements.txt")
 MODEL_CONFIG_CLASSES = list(TF_MODEL_FOR_CAUSAL_LM_MAPPING.keys())
 MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
 
@@ -90,135 +130,100 @@ class DataTrainingArguments:
         metadata={"help": "The number of processes to use for the preprocessing."},
     )
 
-def prepare_dataset():
-    parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TFTrainingArguments))
-    model_args, data_args, run_args = parser.parse_args_into_dataclasses()
+parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TFTrainingArguments))
+model_args, data_args, run_args = parser.parse_args_into_dataclasses()
 
-    logger.setLevel(logging.INFO)
-    datasets.utils.logging.set_verbosity_warning()
-    transformers.utils.logging.set_verbosity_info()
-    
-    if run_args.seed is not None:
-        set_seed(run_args.seed)
-    
-    raw_datasets = load_dataset(
-            data_args.dataset_name,
-            data_args.dataset_config_name,
-            cache_dir=model_args.checkpoint,
-            use_auth_token=None,
-        )
-        
-    
-    config = AutoConfig.from_pretrained(model_args.model_name_or_path)
-    tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
-    column_names = raw_datasets["test"].column_names
-    text_column_name = "text" if "text" in column_names else column_names[0]
+logger.setLevel(logging.INFO)
+datasets.utils.logging.set_verbosity_warning()
+transformers.utils.logging.set_verbosity_info()
 
-    def tokenize_function(examples):
-        return tokenizer(examples[text_column_name])
+if run_args.seed is not None:
+    set_seed(run_args.seed)
 
-    tokenized_datasets = raw_datasets.map(
-        tokenize_function,
-        batched=True,
-        num_proc=data_args.preprocessing_num_workers,
-        remove_columns=column_names,
-        load_from_cache_file=True,
-        desc="Running tokenizer on dataset",
+raw_datasets = load_dataset(
+        data_args.dataset_name,
+        data_args.dataset_config_name,
+        cache_dir=model_args.checkpoint,
+        use_auth_token=None,
     )
-
-    print("Tokenized Dataset:")
-    print(tokenized_datasets["test"])
-    L = []
-    for x in tokenized_datasets["test"]:
-        L.append(len(x['input_ids']))
     
-    print("MAX = ", np.max(np.array(L)) )
+config = AutoConfig.from_pretrained(model_args.model_name_or_path)
+tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
+column_names = raw_datasets["test"].column_names
+text_column_name = "text" if "text" in column_names else column_names[0]
 
-    block_size = tokenizer.model_max_length
-    if block_size > 1024:
-        logger.warning(
-                f"The tokenizer picked seems to have a very large `model_max_length` ({tokenizer.model_max_length}). "
-                "Picking 1024 instead. You can change that default value by passing --block_size xxx."
-            )
-        block_size = 1024
+mydata = tokenizer(raw_datasets["test"][text_column_name], return_tensors="np").input_ids
 
-    def group_texts(examples):
-        concatenated_examples = {k: list(chain(*examples[k])) for k in examples.keys()}
-        total_length = len(concatenated_examples[list(examples.keys())[0]])
-        if total_length >= block_size:
-            total_length = (total_length // block_size) * block_size
-        result = {
-            k: [t[i : i + block_size] for i in range(0, total_length, block_size)]
-            for k, t in concatenated_examples.items()
-        }
-        result["labels"] = result["input_ids"].copy()
-        return result
+marg = {}
+stacked = np.concatenate(mydata)
+unique, counts = np.unique(stacked, return_counts=True)
+counts = counts / np.sum(counts)
 
-    
-    lm_datasets = tokenized_datasets.map(
-        group_texts,
-        batched=True,
-        num_proc=data_args.preprocessing_num_workers,
-        load_from_cache_file=True,
-        desc=f"Grouping texts in chunks of {block_size}",
-    )
+marg = dict(zip(unique, counts))
+marg = defaultdict(lambda: 0, marg)
 
-    eval_dataset = lm_datasets["test"]
+def prepare_attention_mask_for_generation(
+    inputs: tf.Tensor,
+    pad_token_id=50256,
+    eos_token_id=50256,
+) -> tf.Tensor:
+    is_input_ids = len(inputs.shape) == 2 and inputs.dtype in (tf.int32, tf.int64)
+    is_pad_token_in_inputs = (pad_token_id is not None) and tf.math.reduce_any(inputs == pad_token_id)
+    is_pad_token_not_equal_to_eos_token_id = (eos_token_id is None) or (pad_token_id != eos_token_id)
 
-    with run_args.strategy.scope():
-        model = TFAutoModelForCausalLM.from_pretrained(model_args.model_name_or_path, config=config)
-        embeddings = model.get_input_embeddings()
+    # Check if input is input_ids and padded -> only then is attention_mask defined
+    if is_input_ids and is_pad_token_in_inputs and is_pad_token_not_equal_to_eos_token_id:
+        return tf.cast(tf.math.not_equal(inputs, pad_token_id), dtype=tf.int32)
+    else:
+        return tf.ones(inputs.shape[:2], dtype=tf.int32)
 
-        if hasattr(embeddings, "embeddings"):
-            embedding_size = embeddings.embeddings.shape[0]
-        else:
-            embedding_size = embeddings.weight.shape[0]
-        if len(tokenizer) > embedding_size:
-            model.resize_token_embeddings(len(tokenizer))
-        
-        num_replicas = run_args.strategy.num_replicas_in_sync
-        options = tf.data.Options()
-        options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.OFF
-
-        tf_eval_dataset = model.prepare_tf_dataset(
-            eval_dataset,
-            shuffle=False,
-            batch_size=num_replicas * run_args.per_device_eval_batch_size,
-            drop_remainder=True,
-        ).with_options(options)
-
-        return tf_eval_dataset
-
-tf_eval_dataset = prepare_dataset()
-
-def evaluate(path):
+def evaluate(self, path, tf_eval_dataset=mydata):
     model = tf.saved_model.load(path)
     infer = model.signatures["serving_default"]
-    warmup = 1
+    batch_size = 1
+    warmup = 5
     iteration = None
     latency_list = []
-    iteration = 5
-    results = []
+    iteration =100
+    correct = 0
+    pad_token_id = 50256
     for idx, data in enumerate(tf_eval_dataset):
-        inputs = data[0]
-        for name in inputs:
-            inputs[name] = tf.cast(inputs[name], tf.int32)
+        print('Running Iteration: ', idx)
+        input_ids = tf.convert_to_tensor([data[:-1]], dtype=tf.int32)
+        cur_len = len(data)-1
+        input_ids_padding = tf.ones((batch_size, 1), dtype=tf.int32) * (pad_token_id or 0)
+        generated = tf.concat([input_ids, input_ids_padding], axis=-1)
+        input_ids = generated[:, :cur_len]
+        attention_mask = prepare_attention_mask_for_generation(input_ids)
+        inputs = {'input_ids': input_ids, 'attention_mask': attention_mask}
+
         start = time.time()
         predictions = infer(**inputs)
         end = time.time()
-        results.append(predictions)
-        latency_list.append(end - start)
-        if iteration and idx >= iteration:
+
+        dur = end-start
+        print('Time taken: ', dur)
+        latency_list.append(dur)
+        if idx >= iteration:
             break
     latency = np.array(latency_list[warmup:]).mean() / 1
-
-    return latency, results
+    acc = correct/(iteration+1)
+    return latency, acc
 
 def main():    
-    from convert import ConvertSavedModel
-    converter = ConvertSavedModel(src='./gpt-j-6B', dst='./converted_gpt-j-6B', 
-                                                quantize=True, evaluate=evaluate)
-    converter()
+    with run_args.strategy.scope():
+        model = TFAutoModelForCausalLM.from_pretrained(model_args.model_name_or_path, config=config)
+        options = tf.data.Options()
+        options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.OFF
+        from convert import ConvertSavedModel
+        from configs import op_wise_config_matmul, int8_sequences
+        converter = ConvertSavedModel(src='./gpt-j-6B', 
+                                      dst='./converted_gpt-j-6B', 
+                                      quantize=True, 
+                                      evaluate=evaluate,
+                                      op_wise_config=op_wise_config_matmul,
+                                      int8_sequences=int8_sequences)
+        converter()
 
 if __name__ == "__main__":
     main()
