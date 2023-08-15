@@ -20,6 +20,7 @@ python setup.py install
 
 ### Install Requirements
 ```shell
+cd examples/tensorflow/experiement/gpt-j/
 pip install -r requirements.txt
 ```
 > Note: Validated TensorFlow [Version](/docs/source/installation_guide.md#validated-software-environment).

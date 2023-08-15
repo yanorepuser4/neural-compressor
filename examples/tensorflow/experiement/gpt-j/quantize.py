@@ -177,7 +177,7 @@ def prepare_attention_mask_for_generation(
     else:
         return tf.ones(inputs.shape[:2], dtype=tf.int32)
 
-def evaluate(self, path, tf_eval_dataset=mydata):
+def evaluate(path, tf_eval_dataset=mydata):
     model = tf.saved_model.load(path)
     infer = model.signatures["serving_default"]
     batch_size = 1

@@ -163,7 +163,7 @@ class InsertPrintMinMaxNode(GraphRewriterBase):
                 if graph_info[Helper.node_name_from_input(each_node_name)].node.op == 'MatMul':
                     weight_node_name = graph_info[Helper.node_name_from_input(each_node_name)].node.input[1]
                     if graph_info[Helper.node_name_from_input(weight_node_name)].node.op == 'ReadVariableOp':
-                        self.insert_print_for_readvariableop(weight_node_name, each_node_name, cur_graph)
+                        self.insert_print_for_readvariablesop(weight_node_name, each_node_name, cur_graph)
                 name_with_sig = each_node_name + self.signature
                 node_name_prefix = name_with_sig.replace(":", "__port__").replace("^", "__hat__")
                 reshape_dims_name = node_name_prefix + "_reshape_dims"
