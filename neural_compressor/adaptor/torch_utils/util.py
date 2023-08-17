@@ -823,12 +823,15 @@ def get_first_and_last(model):
 
 def get_fp8_scale(tensor, qtconfig):
     scale_method = os.getenv('SCALE_METHOD')
+    e4m3_scale = os.getenv('E4M3_SCALE')
     qtconfig.check_validity(qtconfig.dtype, qtconfig.scheme)
     amax = torch.max(torch.abs(tensor))
     mode = qtconfig.dtype.upper()
     if mode == 'E5M2':
         scale = 1.0
     elif mode in ['E4M3', 'E3M4']:
+        if mode == 'E4M3' and e4m3_scale == '1':
+            return 1.0
         HF_max = qtconfig.get_flt_max()
         amax = torch.max(torch.abs(tensor))
         scale = HF_max/ amax

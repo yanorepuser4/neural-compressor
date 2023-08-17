@@ -3650,6 +3650,7 @@ class PyTorch_FP8Adaptor(TemplateAdaptor):
         self.mix_precision = os.getenv('MIX_PRECISION')
         op_type_list = os.getenv('FP8_OP_TYPE_LIST')
         self.scale_method = os.getenv('SCALE_METHOD')
+        self.e4m3_scale = os.getenv('E4M3_SCALE')
         self.white_list = []
         if op_type_list:
             op_type_list = eval(op_type_list)
@@ -3767,6 +3768,8 @@ class PyTorch_FP8Adaptor(TemplateAdaptor):
             if (name, op_type) in self.tune_cfg['op']:
                 config = self.tune_cfg['op'][(name, op_type)]
                 if config['activation']['dtype'] in ['fp8_e4m3', 'fp8_e3m4']:
+                    if config['activation']['dtype'] == 'fp8_e4m3' and self.e4m3_scale == '1':
+                        continue
                     algorithm = config['activation']['algorithm']
                     qtconfig = model_qconfig_dict[name].iact_qconfig
                     from mpemu.module_wrappers import (BatchMatmul, Matmul, AddMatmul,
@@ -3850,7 +3853,6 @@ class PyTorch_FP8Adaptor(TemplateAdaptor):
                     handle_ids_to_remove.add(handle_id)
             for handle_id in handle_ids_to_remove:
                 hook_map.pop(handle_id)
-
 
     def add_quantization_hooks(self, model, model_qconfig_dict):
         def quantize_module_inputs(self, input):
