@@ -81,6 +81,8 @@ In order to facilitate customer customization, some global environment variables
 | FP8_OP_TYPE_LIST | To specify module type range of emulated FP8 quantization | 'linear', 'conv2d', 'bmm', 'amm', 'mm','add', 'mul', 'div', 'embedding', 'embeddingbag', 'layernorm' |
 | DISABLE_FIRST_CONV | Whether quantize the first convolution layer | True/False |
 | DISABLE_LAST_LINEAR | Whether quantize the last linear layer | True/False |
+| MIX_PRECISION | Whether allow mix precision and auto select data type | True/False |
+| E4M3_SCALE | Whether fix the scale to 1, which means cast fp32 to fp8_e4m3 | 1/- |
 
 
 ## Examples
