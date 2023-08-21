@@ -89,7 +89,6 @@ class TestPytorchWeightOnlyAdaptor(unittest.TestCase):
         compressed_model = q_model.export_compressed_model()
         out3 = compressed_model(input)
         self.assertTrue(torch.all(out3==out2))
-
         model = Model()
         out1 = model(input)
 
@@ -107,6 +106,21 @@ class TestPytorchWeightOnlyAdaptor(unittest.TestCase):
         compressed_model = q_model.export_compressed_model(sym_full_range=True)
         out3 = compressed_model(input)
         self.assertTrue(torch.all(out3==out2))
+
+        model = Model()
+        out1 = model(input)
+        conf = PostTrainingQuantConfig(
+            approach='weight_only',
+            recipes={
+                # By default, sym_full_range is False and 4 bit sym will only use range [-7,7].
+                # When mse_range is set to True, enable clip for weight by checking mse.
+                'rtn_args': {'sym_full_range': True, 'mse_range': True}
+            }
+        )
+        q_model = quantization.fit(model, conf)
+        out2 = q_model(input)
+        self.assertTrue(torch.all(torch.isclose(out1, out2, atol=5e-1)))
+        self.assertFalse(torch.all(out1 == out2))
 
         model = Model()
         out1 = model(input)
@@ -363,17 +377,15 @@ class TestPytorchWeightOnlyAdaptor(unittest.TestCase):
 
 
     def test_GPTQ_quant(self):
-        class gptq_inc_loader(object):
-            def __init__(self, nsamples=32):
+        class GPTQLLMDataLoader():
+            def __init__(self):
                 self.batch_size = 1
-                self.nsamples = nsamples
-            
-            def __len__(self):
-                return self.nsamples // self.batch_size
 
             def __iter__(self):
-                for i in range(self.nsamples):
-                    yield (torch.ones([1, 512], dtype=torch.long), torch.ones([1, 512], dtype=torch.long))
+                for i in range(2):
+                    yield torch.ones([1, 512], dtype=torch.long)
+
+        dataloader = GPTQLLMDataLoader()
 
         conf = PostTrainingQuantConfig(
             approach='weight_only',
@@ -395,11 +407,10 @@ class TestPytorchWeightOnlyAdaptor(unittest.TestCase):
                 },
             },
             recipes={
-                'gptq_args':{'percdamp': 0.01, 'actorder': False},
+                'gptq_args':{'percdamp': 0.01, 'act_order': False},
             },
         )
         input = (torch.ones([1, 512], dtype=torch.long))
-        dataloader = gptq_inc_loader()
         q_model = quantization.fit(self.gptj, conf, calib_dataloader=dataloader,)
         q_model.save('saved')
         out1 = q_model.model(*input)
