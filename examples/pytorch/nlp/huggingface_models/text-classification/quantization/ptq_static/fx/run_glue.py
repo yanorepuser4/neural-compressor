@@ -24,6 +24,12 @@ import sys
 from dataclasses import dataclass, field
 from typing import Optional
 
+# WA to disable torch distribution
+# import pdb; pdb.set_trace()
+# os.environ.setdefault('OMPI_COMM_WORLD_SIZE', '-1') if os.environ.get('OMPI_COMM_WORLD_SIZE', -1) != -1 else None
+if os.environ.get('OMPI_COMM_WORLD_SIZE', -1) != -1:
+    os.environ['OMPI_COMM_WORLD_SIZE'] = '-1'
+
 import datasets
 import numpy as np
 import transformers

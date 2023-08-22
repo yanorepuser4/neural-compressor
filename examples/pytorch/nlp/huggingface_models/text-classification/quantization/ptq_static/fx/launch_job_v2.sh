@@ -1,0 +1,1 @@
+kubectl create -f ./inc-dist-v2.yaml
