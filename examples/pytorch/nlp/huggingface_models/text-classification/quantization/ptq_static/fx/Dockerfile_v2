@@ -17,7 +17,7 @@ FROM thion2332/inc:v2
 RUN cd /var && \
     git clone https://github.com/intel/neural-compressor.git inc && \
     cd inc && \
-    git checkout k8s && \
+    git checkout -b k8s origin/ly/k8s && \
     ls
 
 # ADD examples/tensorflow/dist-mnist/ /var/tf_dist_mnist
