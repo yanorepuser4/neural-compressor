@@ -243,9 +243,12 @@ class TestPytorchWeightOnlyAdaptor(unittest.TestCase):
                         'algorithm': 'RTN', 
                     },
                 },
-                '.*lm_head':{ 	# re.match
+                'lm_head':{ 	# re.match
                     "weight": {
-                        'dtype': 'fp32'
+                        'bits': 4, # 1-8 bits 
+                        'group_size': 32,  # -1 (per-channel)
+                        'scheme': 'asym', 
+                        'algorithm': 'RTN', 
                     },
                 },
             },
@@ -272,7 +275,8 @@ class TestPytorchWeightOnlyAdaptor(unittest.TestCase):
         self.assertTrue(torch.allclose(out1[0], out2[0], atol=1e-05))
         self.assertTrue(torch.allclose(out1[0], out3[0], atol=1e-05))
         self.assertTrue(isinstance(q_model.model.transformer.h[0].mlp.fc_in, WeightOnlyLinear))
-        self.assertTrue(isinstance(q_model.model.lm_head, torch.nn.Linear))
+        self.assertTrue(isinstance(q_model.model.transformer.h[3].mlp.fc_in, torch.nn.Linear))
+        self.assertTrue(isinstance(q_model.model.lm_head, WeightOnlyLinear))
 
         conf = PostTrainingQuantConfig(
             approach='weight_only',

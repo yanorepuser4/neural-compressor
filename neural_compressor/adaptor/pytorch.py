@@ -4332,20 +4332,33 @@ class PyTorchWeightOnlyAdaptor(TemplateAdaptor):
                     repr(e)))
                 q_model = model
 
+        # check whether there is a customed lm_head setting.
+        customed_lm_head = False
+        if tune_cfg['op_name_dict'] is not None:
+            for k, v in tune_cfg['op_name_dict'].items():
+                if 'lm_head' in k:
+                    customed_lm_head = True
+
+        # check all algoes used in tune_cfg.
+        all_algo = set()
+        for key, config in tune_cfg['op'].items():
+            op_name, op_type = key
+            if 'lm_head' in op_name and not customed_lm_head:
+                logger.info("lm_head is skipped by default.")
+                logger.info("lm_head can be quantized if configured in op_name_dict.")
+                tune_cfg['op'][key] = {'weight': {'dtype': 'fp32'}}
+            if config['weight']['dtype'] == 'fp32':
+                continue
+            else:
+                algorithm = config['weight']['algorithm']
+                all_algo.add(algorithm)
+
         # For tensorboard display
         self.tune_cfg = tune_cfg
         self.tune_cfg["approach"] = self.approach
         self.tune_cfg["framework"] = "pytorch"
         assert self.approach=='post_training_weight_only', "Please make sure the approach is weight_only"
 
-        all_algo = set()
-        for key, config in tune_cfg['op'].items():
-            op_name, op_type = key
-            if config['weight']['dtype'] == 'fp32':
-                continue
-            else:
-                algorithm = config['weight']['algorithm']
-                all_algo.add(algorithm)
         if len(all_algo):
             logger.info(f"All algorithms to do: {all_algo}")
         if 'GPTQ' in all_algo:

@@ -461,6 +461,8 @@ class TuneStrategy(metaclass=TuneStrategyMeta):
             tuning_start_time = time()
             self.trials_count += 1
             tune_cfg = self._tune_cfg_converter(op_tuning_cfg)
+            tune_cfg['op_name_dict'] = self.config.op_name_dict
+            tune_cfg['op_type_dict'] = self.config.op_type_dict
             tuning_history = self._find_tuning_history(tune_cfg)
             if tuning_history and self.trials_count < self.config.tuning_criterion.max_trials: # pragma: no cover
                 self.last_tune_result = tuning_history['last_tune_result']
