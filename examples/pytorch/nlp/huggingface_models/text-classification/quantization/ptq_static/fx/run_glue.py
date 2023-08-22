@@ -526,7 +526,11 @@ def main():
         from neural_compressor.quantization import fit
         from neural_compressor.config import PostTrainingQuantConfig, TuningCriterion
         tuning_criterion = TuningCriterion(max_trials=600)
-        conf = PostTrainingQuantConfig(approach="static", tuning_criterion=tuning_criterion)
+        conf = PostTrainingQuantConfig(
+            quant_level=1,
+            approach="static",
+            tuning_criterion=tuning_criterion
+            )
         q_model = fit(model, conf=conf, calib_dataloader=eval_dataloader, eval_func=eval_func)
         from neural_compressor.utils.load_huggingface import save_for_huggingface_upstream
         save_for_huggingface_upstream(q_model, tokenizer, training_args.output_dir)
