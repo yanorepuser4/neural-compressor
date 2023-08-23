@@ -1,0 +1,1 @@
+bash run_benchmark.sh --input_model=/home/azure-node-inc/llama-2-13-hf-onnx --mode=accuracy --tokenizer=/home/azure-node-inc/llama-2-13-hf-onnx --tasks=lambada_openai --workspace=./llama-2-13b-workspace
