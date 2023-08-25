@@ -446,13 +446,17 @@ class TuneStrategy(metaclass=TuneStrategyMeta):
             from mpi4py import MPI
             if MPI.COMM_WORLD.Get_size() > 2:
                 logger.info("Use distributed tuning on {} nodes".format(MPI.COMM_WORLD.Get_size()))
-                return self.distributed_traverse()
             elif MPI.COMM_WORLD.Get_size() == 2:
                 logger.info("Use distributed tuning on {} nodes, will be fallback to normal tuning."\
                     .format(MPI.COMM_WORLD.Get_size()))
+            MPI_INSTALLED=True
         except (ImportError, AttributeError) as e:
             logger.warning("[Strategy] Please install `mpi4py` correctly if using distributed tuning;" + \
                 " otherwise, ignore this warning.")
+            MPI_INSTALLED=False
+        if MPI_INSTALLED:
+            if MPI.COMM_WORLD.Get_size() > 2:
+                return self.distributed_traverse()
         self._setup_pre_tuning_algo_scheduler()
         self._prepare_tuning()
         # import pdb;pdb.set_trace()
@@ -899,8 +903,7 @@ class TuneStrategy(metaclass=TuneStrategyMeta):
             sq_algo.alpha = user_alpha[0] if isinstance(user_alpha, list) else user_alpha
             # TODO move all adaptor checks into algo implementation
             if 'folding' not in smooth_quant_args:
-                smooth_quant_args['folding'] = True if self.framework in ['pytorch', 'pytorch_fx', 'onnxruntime'] \
-                  else False
+                smooth_quant_args['folding'] = True if self.framework in ['onnxruntime'] else False
                 logger.info("SmoothQuant args 'folding' is not set, it's {} now.".format(smooth_quant_args['folding']))
                 if self.framework == 'pytorch_ipex':
                     smooth_quant_args['folding'] = None # will reset it to True if IPEX version < 2.1.
