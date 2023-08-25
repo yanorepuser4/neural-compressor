@@ -179,7 +179,7 @@ class ConvertSavedModel():
             self._tmp_graph_def,
             self._calibration_data,
             '__min:',
-            self.itex_mode.do_transformation()
+            self.itex_mode).do_transformation()
         self._tmp_graph_def, _= FreezeValueTransformer(
             self._tmp_graph_def,
             self._calibration_data,
