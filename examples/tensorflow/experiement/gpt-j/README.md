@@ -140,17 +140,18 @@ The following results are expected to be shown:
 ---------------------------------------------------------
 The infrence results of original gpt-j with TF2.x API
 Batch size = 1
-Accuracy: 78.218%
+Accuracy: 79.602%
 Latency: 1195.945 ms
 Throughput: 0.836 samples/sec
 ---------------------------------------------------------
 The infrence results of converted gpt-j with TF2.x API
 Batch size = 1
-Accuracy: 77.228%
+Accuracy: 79.104%
 Latency: 1404.469 ms
 Throughput: 0.712 samples/sec
 ```
 
+We reach a 99.4% accuracy ratio.
 ## 4. Dump Graph(Optional)
 We can also dump graph from the saved_model to check if the conversion is successful:
 

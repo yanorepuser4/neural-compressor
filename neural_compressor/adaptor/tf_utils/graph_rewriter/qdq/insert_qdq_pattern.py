@@ -31,7 +31,7 @@ import re
 class GenerateGraphWithQDQPattern(GraphRewriterBase):
     """Insert Q/DQ pairs before quantizable ops."""
     def __init__(self, model, calibration_data, op_wise_config, fake_quant, fp32_ops,
-                 bf16_ops, quantized_nodes, device, performance_only, itex_mode):
+                 bf16_ops, quantized_nodes, device, performance_only, itex_mode, weight_minmax):
         """Initilization."""
         super().__init__(model)
         self.data = calibration_data
@@ -43,6 +43,7 @@ class GenerateGraphWithQDQPattern(GraphRewriterBase):
         self.device = device
         self.performance_only = performance_only
         self.itex_mode = itex_mode
+        self.weight_minmax = weight_minmax
         self.node_details = namedtuple('node_details', ['node', 'output'])
         self.node_name_mapping = {}
         self.check_op_list = {"ConcatV2", "Conv2D", "Conv3D", "DepthwiseConv2D", "QuantizeV2", "DepthwiseConv2dNative",
@@ -449,8 +450,7 @@ class GenerateGraphWithQDQPattern(GraphRewriterBase):
                                             min_max_values,
                                             per_channel,
                                             weight_bit=7.0,
-                                            device='cpu',
-                                            scaler=0.75):
+                                            device='cpu'):
         """Insert QDQ pattern for weight node."""
         host_op_type = computational_node.op
         base_name = weight_node.name + "_"
@@ -505,8 +505,23 @@ class GenerateGraphWithQDQPattern(GraphRewriterBase):
                 min_value = -range_value
                 max_value = range_value
         elif weight_node.op == 'ReadVariableOp':
-            min_value = np.min(min_max_values[weight_node.name+'__min'])*scaler
-            max_value = np.max(min_max_values[weight_node.name+'__max'])*scaler
+            min_value = self.weight_minmax[weight_node.name][0]
+            max_value = self.weight_minmax[weight_node.name][1]
+            min_value *= range_coefficent
+            max_value *= range_coefficent
+            min_value = min(min_value, 0.0)
+            if min_value == max_value:
+                if abs(min_value) < 0.000001:
+                    max_value = min_value + 1.0
+                elif min_value > 0:
+                    max_value = 2 * min_value
+                else:
+                    max_value = min_value / 2.0
+            range_value = np.max(np.abs([min_value, max_value]))
+            # qint8_tensor = (np.around(float_tensor * 127.0 / range_value)).astype(np.int8)
+            # qint8_tensor = np.clip(qint8_tensor, -127, 127).astype(np.int8)
+            min_value = -range_value
+            max_value = range_value
         elif host_op_type == "DepthwiseConv2dNative":
             float_tensor = tensor_util.MakeNdarray(weight_node.attr["value"].tensor)
             # get the max values based on dim 0 and 1 for depthwise conv

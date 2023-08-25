@@ -231,7 +231,7 @@ class Inference():
         warmup = 5
         iteration = None
         latency_list = []
-        iteration = 100
+        iteration = 200
         correct = 0
         for idx, data in enumerate(tf_eval_dataset):
             print('Running Iteration: ', idx)

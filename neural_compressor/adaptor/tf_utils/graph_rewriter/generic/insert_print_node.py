@@ -37,84 +37,6 @@ class InsertPrintMinMaxNode(GraphRewriterBase):
         self.signature = pre_node_name + post_node_name
         self.new_api = new_api
 
-    def insert_print_for_readvariablesop(self, weight_node_name, computational_node_name, cur_graph):
-        index = 0
-        graph_info = self.graph_info
-        name_with_sig = weight_node_name + self.signature
-        node_name_prefix = name_with_sig.replace(":", "__port__").replace("^", "__hat__")
-        reshape_dims_name = node_name_prefix + "_reshape_dims"
-        reduction_dims_name = node_name_prefix + "_reduction_dims"
-
-        reshape_dims_node = Helper.create_constant_node(
-            reshape_dims_name, -1, dtypes.int32, [1])
-
-        reduction_dims_node = Helper.create_constant_node(
-            reduction_dims_name, 0, dtypes.int32, [1])
-
-        reshape_input_name = node_name_prefix + "_reshape_"
-
-        reshape_input_node = Helper.create_node("Reshape", reshape_input_name,
-                                                [weight_node_name, reshape_dims_name])
-
-        min_input_name = node_name_prefix + "_min"
-        min_input_node = Helper.create_node(
-                "Min", min_input_name, [reshape_input_name, reduction_dims_name])
-        Helper.set_attr_dtype(min_input_node, "Tidx", dtypes.int32)
-        Helper.set_attr_bool(min_input_node, "keep_dims", False)
-
-        max_input_name = node_name_prefix + "_max"
-        max_input_node = Helper.create_node(
-                "Max", max_input_name, [reshape_input_name, reduction_dims_name])
-        Helper.set_attr_dtype(max_input_node, "Tidx", dtypes.int32)
-        Helper.set_attr_bool(max_input_node, "keep_dims", False)
-
-        max_print_node = Helper.create_node(
-            "Print", node_name_prefix + "_print_max__{}".format(index),
-            [max_input_name + ':0', max_input_name+':0'])
-        min_print_node = Helper.create_node(
-            "Print", node_name_prefix + "_print_min__{}".format(index),
-            [min_input_name+':0', min_input_name+':0'])
-
-        if index == 0:
-            max_msg = ';{}_eightbit_max_{}__print__;__max:'.format(
-                weight_node_name, weight_node_name)
-            min_msg = ';{}_eightbit_min_{}__print__;__min:'.format(
-                weight_node_name, weight_node_name)
-            src_dt = graph_info[computational_node_name].node.attr["T"]
-
-        graph_info[computational_node_name].node.input.append("^" + min_print_node.name)
-        graph_info[computational_node_name].node.input.append("^" + max_print_node.name)
-
-        reshape_input_node.attr["T"].CopyFrom(src_dt)
-        min_input_node.attr["T"].CopyFrom(src_dt)
-        min_print_node.attr["T"].CopyFrom(src_dt)
-        max_input_node.attr["T"].CopyFrom(src_dt)
-        max_print_node.attr["T"].CopyFrom(src_dt)
-
-        min_print_node.attr["message"].s = min_msg.encode()
-        min_print_node.attr["first_n"].i = -1
-        min_print_node.attr["summarize"].i = 1024
-
-        max_print_node.attr["message"].s = max_msg.encode()
-        max_print_node.attr["first_n"].i = -1
-        max_print_node.attr["summarize"].i = 1024
-
-        attr_u = [dtypes.as_dtype(src_dt.type).as_datatype_enum]
-        min_print_node.attr["U"].list.CopyFrom(
-            attr_value_pb2.AttrValue.ListValue(type=attr_u))
-        max_print_node.attr["U"].list.CopyFrom(
-            attr_value_pb2.AttrValue.ListValue(type=attr_u))
-        post_node_names = computational_node_name
-        cur_graph.add_node(reshape_dims_node, None, [reshape_input_name])
-        cur_graph.add_node(reduction_dims_node, None, [max_input_name, min_input_name])
-        cur_graph.add_node(reshape_input_node, weight_node_name,
-                            [max_input_name, min_input_name])
-        cur_graph.add_node(max_input_node, reshape_input_name, [max_print_node.name])
-        cur_graph.add_node(min_input_node, reshape_input_name, [min_print_node.name])
-
-        cur_graph.add_node(min_print_node, min_input_name, [])
-        cur_graph.add_node(max_print_node, max_input_name, [])
-
     def do_transformation(self):
         """Insert print node in the graph to do the calibration."""
         cur_graph = GraphAnalyzer()
@@ -160,10 +82,6 @@ class InsertPrintMinMaxNode(GraphRewriterBase):
         output_names = []
         for node_pair_names in insert_node_pairs:
             for index, each_node_name in enumerate(node_pair_names):
-                if graph_info[Helper.node_name_from_input(each_node_name)].node.op == 'MatMul':
-                    weight_node_name = graph_info[Helper.node_name_from_input(each_node_name)].node.input[1]
-                    if graph_info[Helper.node_name_from_input(weight_node_name)].node.op == 'ReadVariableOp':
-                        self.insert_print_for_readvariablesop(weight_node_name, each_node_name, cur_graph)
                 name_with_sig = each_node_name + self.signature
                 node_name_prefix = name_with_sig.replace(":", "__port__").replace("^", "__hat__")
                 reshape_dims_name = node_name_prefix + "_reshape_dims"

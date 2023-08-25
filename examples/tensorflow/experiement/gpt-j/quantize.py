@@ -177,14 +177,15 @@ def prepare_attention_mask_for_generation(
     else:
         return tf.ones(inputs.shape[:2], dtype=tf.int32)
 
-def evaluate(path, tf_eval_dataset=mydata):
-    model = tf.saved_model.load(path)
+def evaluate(model, iter, tf_eval_dataset=mydata):
+    if isinstance(model, str):
+        model = tf.saved_model.load(model)
     infer = model.signatures["serving_default"]
     batch_size = 1
     warmup = 5
     iteration = None
     latency_list = []
-    iteration =100
+    iteration = iter
     correct = 0
     pad_token_id = 50256
     for idx, data in enumerate(tf_eval_dataset):
@@ -219,7 +220,6 @@ def main():
         from configs import op_wise_config_matmul, int8_sequences
         converter = ConvertSavedModel(src='./gpt-j-6B', 
                                       dst='./converted_gpt-j-6B', 
-                                      quantize=True, 
                                       evaluate=evaluate,
                                       op_wise_config=op_wise_config_matmul,
                                       int8_sequences=int8_sequences)

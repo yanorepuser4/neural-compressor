@@ -1,4 +1,5 @@
 import os
+import numpy as np
 import tensorflow as tf
 from tensorflow.python.eager import context
 from tensorflow.python.saved_model import load
@@ -19,15 +20,13 @@ from tensorflow.core.framework import variable_pb2
 from tensorflow.python.eager import wrap_function
 from tensorflow.python.util import nest
 from tensorflow.python.saved_model import save
-
+from utils import parse_saved_model, reconstruct_saved_model
 # from insert_qdq import GenerateGraphWithQDQPattern
 from configs import op_wise_config, int8_sequences
 
 class ConvertSavedModel():
-    def __init__(self, src='./gpt-j-6B', 
-                 dst='./converted_gpt-j-6B', 
-                 quantize=False, evaluate=None, 
-                 op_wise_config={}, int8_sequences={}):
+    def __init__(self, src='./gpt-j-6B', dst='./converted_gpt-j-6B', 
+                        evaluate=None, op_wise_config={}, int8_sequences={}):
         self.src = src
         self.dst = dst
         self.fp32_ops = []
@@ -38,84 +37,9 @@ class ConvertSavedModel():
         self.fake_quant = False 
         self.evaluate = evaluate
         self.performance_only = False
-        self.apply_quantize = quantize
         self.op_wise_config = op_wise_config
         self.int8_sequences = int8_sequences
-
-    def _apply_inlining(self, func):
-        """Apply an inlining optimization to the function's graph definition."""
-        graph_def = func.graph.as_graph_def()
-
-        # In some cases, a secondary implementation of the function (e.g. for GPU) is
-        # written to the "api_implements" attribute. (e.g. `tf.keras.layers.LSTM` in
-        # TF2 produces a CuDNN-based RNN for GPU).
-        # This function suppose to inline all functions calls, but "api_implements"
-        # prevents this from happening. Removing the attribute solves the problem.
-        # To learn more about "api_implements", see:
-        #   tensorflow/core/grappler/optimizers/implementation_selector.h
-        for function in graph_def.library.function:
-            if "api_implements" in function.attr:
-                del function.attr["api_implements"]
-
-        meta_graph = saver.export_meta_graph(graph_def=graph_def, graph=func.graph)
-
-        # Clear the initializer_name for the variables collections, since they are not
-        # needed after saved to saved_model.
-        for name in [
-            "variables", "model_variables", "trainable_variables", "local_variables"
-        ]:
-            raw_list = []
-            for raw in meta_graph.collection_def["variables"].bytes_list.value:
-                variable = variable_pb2.VariableDef()
-                variable.ParseFromString(raw)
-                variable.ClearField("initializer_name")
-                raw_list.append(variable.SerializeToString())
-            meta_graph.collection_def[name].bytes_list.value[:] = raw_list
-
-        # Add a collection 'train_op' so that Grappler knows the outputs.
-        fetch_collection = meta_graph_pb2.CollectionDef()
-        for array in func.inputs + func.outputs:
-            fetch_collection.node_list.value.append(array.name)
-        meta_graph.collection_def["train_op"].CopyFrom(fetch_collection)
-
-        # Initialize RewriterConfig with everything disabled except function inlining.
-        config = config_pb2.ConfigProto()
-        rewrite_options = config.graph_options.rewrite_options
-        rewrite_options.min_graph_nodes = -1  # do not skip small graphs
-        rewrite_options.optimizers.append("function")
-
-        new_graph_def = tf_optimizer.OptimizeGraph(config, meta_graph)
-
-        return new_graph_def
-
-    def _construct_function_from_graph_def(self, func, graph_def, frozen_func=None):
-        """Rebuild function from graph_def."""
-        if frozen_func is None:
-            frozen_func = func
-
-        # If a function is converted, then the TF context contains the original
-        # function while the converted_graph_def contains the converted function.
-        # Remove the original function from the TF context in this case.
-        for f in graph_def.library.function:
-            while context.context().has_function(f.signature.name):
-                context.context().remove_function(f.signature.name)
-
-        captures = {
-            c[1].name.split(":")[0]: c[0]
-            for c in frozen_func.graph.captures
-        }
-        new_func = wrap_function.function_from_graph_def(
-            graph_def, [tensor.name for tensor in frozen_func.inputs],
-            [tensor.name for tensor in frozen_func.outputs], captures)
-        new_func.graph.structured_outputs = nest.pack_sequence_as(
-            func.graph.structured_outputs, new_func.graph.structured_outputs)
-        # new_func._function_type = func.function_type  # pylint: disable=protected-access
-
-        # Copy structured input signature from original function (used during
-        # serialization)
-        new_func.graph.structured_input_signature = (func.structured_input_signature)
-
-        return new_func
+        self.weight_tensor_minmax_dict = {}
 
     def inc_preoptimize(self, graph_def):
         from neural_compressor import Model
@@ -149,20 +73,35 @@ class ConvertSavedModel():
                         matched_add_nodes.append((i,))
         return matched_add_nodes
 
-    def reconstruct_saved_model(self, converted_graph_def):
-        converted_func = self._construct_function_from_graph_def(
-        self.func, converted_graph_def, self.frozen_func)
+    def _adjust_weight(self, graph_def):
+        """In-place adjust weight by scale.
 
-        trackable = self._saved_model
-        signatures = {signature_constants.DEFAULT_SERVING_SIGNATURE_DEF_KEY: converted_func}
-        save.save(trackable, self.dst, signatures, options=None)
+        Args:
+            scale: smooth scale with the shape (ic,)
+            weight_node: reference to the original const weight node
+            original_weight: numpy value of the original const weight node
+        """
+        # scale: (ic,)
+        from utils import weight_name_mapping
+        reconstruct_saved_model(graph_def, self.func, self.frozen_func, self._saved_model, self.dst)
+        model = load.load(self.dst, [tag_constants.SERVING])
+        for idx, weight_tensor in enumerate(model.variables):
+            parsed_weight_name = weight_name_mapping(weight_tensor.name)
+            if parsed_weight_name in self.sq_weight_scale_dict:
+                W = np.transpose(weight_tensor, [1, 0])
+                W *= self.sq_weight_scale_dict[parsed_weight_name]
+                W = np.transpose(W, [1, 0])
+                tf.compat.v1.assign(model.variables[idx], W)
+                if parsed_weight_name not in self.weight_tensor_minmax_dict:
+                    self.weight_tensor_minmax_dict[parsed_weight_name] = [np.min(W), np.max(W)]
+        return model
 
     def _inference(self, sampling_graph_def):
         import time
         print('Inference the saved_model and capture outputs to files')
-        self.reconstruct_saved_model(sampling_graph_def)
+        model = self._adjust_weight(sampling_graph_def)
         start = time.time()
-        _, _ = self.evaluate(self.dst)
+        _, _ = self.evaluate(model, iter=1)
         end = time.time()
         print('Calibration Inference Time: ', end-start)
 
@@ -227,32 +166,24 @@ class ConvertSavedModel():
 
         # Insert QDQ pattern
         self._tmp_graph_def = GenerateGraphWithQDQPattern(
-              graph_def, self._calibration_data, self.op_wise_config,
-              self.fake_quant, self.fp32_ops, self.bf16_ops, self.quantized_node_info,
-              self.device, self.performance_only, self.itex_mode).do_transformation()
+              graph_def, self._calibration_data, self.op_wise_config, self.fake_quant, 
+              self.fp32_ops, self.bf16_ops, self.quantized_node_info, self.device, 
+              self.performance_only, self.itex_mode, self.weight_tensor_minmax_dict).do_transformation()
         
-        threshold = 0.75
-        scaler = 0.75
         self._tmp_graph_def, _ = FreezeValueTransformer(
             self._tmp_graph_def,
             self._calibration_data,
             '__max:',
-            self.itex_mode,
-            th=threshold,
-            scaler=scaler).do_transformation()
+            self.itex_mode).do_transformation()
         self._tmp_graph_def, _ = FreezeValueTransformer(
             self._tmp_graph_def,
             self._calibration_data,
             '__min:',
-            self.itex_mode,
-            th=threshold,
-            scaler=scaler).do_transformation()
+            self.itex_mode.do_transformation()
         self._tmp_graph_def, _= FreezeValueTransformer(
             self._tmp_graph_def,
             self._calibration_data,
             '__requant_min_max',
-            th=threshold,
-            scaler=scaler,
             tensor_data= {},
             device=self.device,
             itex_mode=self.itex_mode).do_transformation()
@@ -268,46 +199,57 @@ class ConvertSavedModel():
 
         return self._tmp_graph_def
 
+    def smooth_quant(self, model_path, calib_iter=1, tune_cfg=None, alpha=0.491, folding=False,
+                     percentile=99.999, op_types=['MatMul', 'Conv2D'], scales_per_op=True):
+        """Convert the model by smooth quant.
+
+        Args:
+            model: original model
+            dataloader: the calibration dataloader
+            calib_iter: how many steps of iterations on the dataloader to move forward
+            tune_cfg: quantization config
+            alpha: smooth alpha in SmoothQuant, 1.0 will fallback to SPIQ
+            folding: whether insert mul(False) or just allow foldable layers(True) for SmoothQuant
+            percentile: percentile of calibration to remove outliers
+            op_types: The op types whose input tensor will be dumped
+            scales_per_op: True, each op will have an individual scale, mainly for accuracy
+                           False, ops with the same input will share a scale, mainly for performance
+
+        Returns:
+            model: A smoothed Tensorflow model
+        """
+        # Get the nodes list which can't be quantized from tune_cfg
+        black_nodes = []
+
+        # Run calibration to get max values per channel
+        from smooth_quant import SmoothQuantCalibration
+        calibration = SmoothQuantCalibration(model_path, self.evaluate, self.dst, \
+                                                    op_types, percentile, black_nodes)
+        max_vals_per_channel, sq_weight_node_names, sq_weight_tensor_dict = calibration()
+
+        # Calculate the smooth quant scaler and insert Mul op into the graph
+        from smooth_quant  import SmoothQuantScaler
+        scaler = SmoothQuantScaler(model_path, self.dst, alpha, scales_per_op)
+        sq_graph_def, self._saved_model, self.func, \
+            self.frozen_func, self.sq_weight_scale_dict = scaler.transform(max_vals_per_channel,
+                                          sq_weight_tensor_dict, sq_weight_node_names)
+        return sq_graph_def
+
     def __call__(self):
-        config = tf.compat.v1.ConfigProto()
-        config.use_per_session_threads = 1
-        config.inter_op_parallelism_threads = 1
-
-        self._saved_model = load.load(self.src, [tag_constants.SERVING])
-        self.func = self._saved_model.signatures[signature_constants.DEFAULT_SERVING_SIGNATURE_DEF_KEY]
-
-        inlined_graph_def = self._apply_inlining(self.func)
-        # self._annotate_variable_ops(func, inlined_graph_def)
-        self.frozen_func = self._construct_function_from_graph_def(self.func, inlined_graph_def)
-
-        frozen_graph_def = self.frozen_func.graph.as_graph_def()
-        grappler_meta_graph_def = saver.export_meta_graph(
-            graph_def=frozen_graph_def, graph=self.frozen_func.graph)
-
-        # Add a collection 'train_op' so that Grappler knows the outputs.
-        fetch_collection = meta_graph_pb2.CollectionDef()
-        for array in self.frozen_func.inputs + self.frozen_func.outputs:
-            fetch_collection.node_list.value.append(array.name)
-            grappler_meta_graph_def.collection_def["train_op"].CopyFrom(
-                fetch_collection)
-
-        grappler_session_config = config_pb2.ConfigProto()
-        rewrite_options = grappler_session_config.graph_options.rewrite_options
-        rewrite_options.min_graph_nodes = -1
-        extracted_graph_def = tf_optimizer.OptimizeGraph(grappler_session_config,
-                                            grappler_meta_graph_def, graph_id=b"tf_graph")
+        sq_graph_def = self.smooth_quant(self.src)
 
         f=tf.io.gfile.GFile('extracted_graph_def.pb','wb')
-        f.write(extracted_graph_def.SerializeToString()) 
+        f.write(sq_graph_def.SerializeToString()) 
 
-        extracted_graph_def = self.inc_preoptimize(extracted_graph_def)
+        graph_def = self.inc_preoptimize(sq_graph_def)
+
         print('Start to apply quantization')
-        if self.apply_quantize:
-            converted_graph_def = self.quantize(extracted_graph_def)
-        else:
-            converted_graph_def = extracted_graph_def
+        quantized_graph_def = self.quantize(graph_def)
 
         f=tf.io.gfile.GFile('converted_graph_def.pb','wb')
-        f.write(converted_graph_def.SerializeToString()) 
+        f.write(quantized_graph_def.SerializeToString()) 
+
         print('Save Quantized model to ', self.dst)
-        self.reconstruct_saved_model(converted_graph_def)
+        model = self._adjust_weight(quantized_graph_def)
+        graph_def, _saved_model, func, frozen_func = parse_saved_model(model)
+        reconstruct_saved_model(graph_def, func, frozen_func, _saved_model, self.dst)
