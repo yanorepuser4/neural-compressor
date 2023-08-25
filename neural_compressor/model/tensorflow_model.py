@@ -235,7 +235,7 @@ def load_saved_model(model, saved_model_tags, input_tensor_names, output_tensor_
     """Load graph_def from saved model with the default serving signature key.
 
     Args:
-        saved_model_dir: Directory of the SavedModel.
+        model: Directory of the SavedModel.
         saved_model_tags: Set of tags identifying the MetaGraphDef within the
             SavedModel to analyze.
 
@@ -1059,6 +1059,89 @@ class TensorflowSavedModelModel(TensorflowBaseModel):
         """Save Tensorflow model."""
         root, builder = self.build_saved_model(root)
         builder.save()
+        logger.info("Save quantized model to {}.".format(root))
+
+
+class TensorflowLLMSavedModelModel(TensorflowBaseModel):
+    def __init__(self, model, **kwargs):
+        from neural_compressor.adaptor.tf_utils.utils import parse_saved_model, reconstruct_saved_model
+        super(TensorflowLLMSavedModelModel, self).__init__(model, **kwargs)
+        # for tensorflow.GraphDef that exceeds maximum protobuf size of 2GB
+        self.weight_name_mapping = None
+        self.sq_weight_scale_dict = None
+        self._model_type = 'large_saved_model'
+        self.graph_def, self._saved_model, self.func, self.frozen_func = parse_saved_model(model)
+    
+    @property
+    def graph_def(self):
+        """Return graph defination."""
+        return self.graph_def
+
+    @property
+    def model(self):
+        """Return model itself."""
+        return self.model
+
+    @property
+    def weight_name_mapping(self):
+        """Return model itself."""
+        return self.weight_name_mapping
+
+    @weight_name_mapping.setter
+    def weight_name_mapping(self, weight_name_mapping):
+        self.weight_name_mapping = weight_name_mapping
+
+    @sq_weight_scale_dict.setter
+    def sq_weight_scale_dict(self, sq_weight_scale_dict):
+        self.sq_weight_scale_dict = sq_weight_scale_dict
+
+    @property
+    def input_tensor_names(self):
+        """Return input tensor names."""
+        if len(self._input_tensor_names) == 0:
+            for input_tensor in self.fun.inputs:
+                # skip all ReadVariablesOp
+                if 'unknown' in input_tensor.name:
+                    continue
+                self._input_tensor_names.append(input_tensor.name)
+        return copy.deepcopy(self._input_tensor_names)
+
+    @property
+    def output_tensor_names(self):
+        """Return output tensor names."""
+        if len(self._output_tensor_names) == 0:
+            for output_tensor in self.fun.outputs:
+                self._output_tensor_names.append(output_tensor.name)
+        return copy.deepcopy(self._output_tensor_names)
+
+    def _adjust_weight(self, graph_def):
+        """Adjust weight of LLM saved_model by scale."""
+        reconstruct_saved_model(graph_def, self.func, self.frozen_func, self._saved_model, self.dst)
+        model = load.load(self.dst, [tag_constants.SERVING])
+
+        for idx, weight_tensor in enumerate(model.variables):
+            parsed_weight_name = self.weight_name_mapping(weight_tensor.name)
+            if parsed_weight_name in self.sq_weight_scale_dict:
+                W = np.transpose(weight_tensor, [1, 0])
+                W *= self.sq_weight_scale_dict[parsed_weight_name]
+                W = np.transpose(W, [1, 0])
+                tf.compat.v1.assign(model.variables[idx], W)
+                if parsed_weight_name not in self.weight_tensor_minmax_dict:
+                    self.weight_tensor_minmax_dict[parsed_weight_name] = [np.min(W), np.max(W)]
+
+    def save(self, root):
+        if not root:
+            root = cfg.default_workspace
+        root = os.path.abspath(os.path.expanduser(root))
+        if os.path.exists(root):
+            import shutil
+            shutil.rmtree(root)
+
+        os.makedirs(root, exist_ok=True)
+
+        model = self._adjust_weight(self.graph_def)
+        graph_def, _saved_model, func, frozen_func = parse_saved_model(model)
+        reconstruct_saved_model(graph_def, func, frozen_func, _saved_model, self.dst)
         logger.info("Save quantized model to {}.".format(root))
 
 class TensorflowQATModel(TensorflowSavedModelModel):

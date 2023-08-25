@@ -31,6 +31,7 @@ from ..utils.utility import version1_lt_version2, version1_gte_version2, version
 from ..utils import logger
 from ..conf.dotdict import deep_get
 from ..data.dataloaders.base_dataloader import BaseDataLoader
+from ..model.tensorflow_model import TensorflowLLMSavedModelModel
 
 tensorflow = LazyImport('tensorflow')
 spr_base_verions = ('2.11.0202242', '2.11.0202250', '2.11.0202317', '2.11.0202323')
@@ -1713,6 +1714,9 @@ class TensorFlowAdaptor(Adaptor):
         if self.smooth_quant_model is not None:
             return self.smooth_quant_model
 
+        if isinstance(model, TensorflowLLMSavedModelModel):
+            return smooth_quant_LLM(model_path, calib_iter, tune_cfg, alpha, folding,
+                     percentile, op_types, scales_per_op)
         # Do a pre-optimization before smooth quant
         from .tf_utils.graph_rewriter.generic.pre_optimize import PreOptimization
         self.pre_optimizer_handle = PreOptimization(model, self.new_api, self.device)
@@ -1740,6 +1744,45 @@ class TensorFlowAdaptor(Adaptor):
         scaler = SmoothQuantScaler(model, dataloader, alpha, scales_per_op)
         model, mul_list = scaler.transform(max_vals_per_channel, sq_weight_tensors,
                                            sq_weights_nodes, sq_weight_node_names)
+        self.smooth_quant_mul_ops.extend(mul_list)
+        self.smooth_quant_model = model
+        return self.smooth_quant_model
+
+    def smooth_quant_LLM(self, model_path, calib_iter=1, tune_cfg=None, alpha=0.491, folding=False,
+                     percentile=99.999, op_types=['MatMul', 'Conv2D'], scales_per_op=True):
+        """Convert the model by smooth quant.
+
+        Args:
+            model: original model
+            dataloader: the calibration dataloader
+            calib_iter: how many steps of iterations on the dataloader to move forward
+            tune_cfg: quantization config
+            alpha: smooth alpha in SmoothQuant, 1.0 will fallback to SPIQ
+            folding: whether insert mul(False) or just allow foldable layers(True) for SmoothQuant
+            percentile: percentile of calibration to remove outliers
+            op_types: The op types whose input tensor will be dumped
+            scales_per_op: True, each op will have an individual scale, mainly for accuracy
+                           False, ops with the same input will share a scale, mainly for performance
+
+        Returns:
+            model: A smoothed Tensorflow model
+        """
+        # Get the nodes list which can't be quantized from tune_cfg
+        black_nodes = []
+
+        # Run calibration to get max values per channel
+        from smooth_quant import SmoothQuantCalibration
+        calibration = SmoothQuantCalibration(model_path, self.evaluate, self.dst, \
+                                                    op_types, percentile, black_nodes)
+        max_vals_per_channel, sq_weight_node_names, sq_weight_tensor_dict = calibration()
+
+        # Calculate the smooth quant scaler and insert Mul op into the graph
+        from smooth_quant  import SmoothQuantScaler
+        scaler = SmoothQuantScaler(model_path, self.dst, alpha, scales_per_op)
+        sq_graph_def, self._saved_model, self.func, \
+            self.frozen_func, self.sq_weight_scale_dict = scaler.transform(max_vals_per_channel,
+                                          sq_weight_tensor_dict, sq_weight_node_names)
+        model.graph_def = sq_graph_def
         self.smooth_quant_mul_ops.extend(mul_list)
         self.smooth_quant_model = model
         return self.smooth_quant_model

@@ -146,3 +146,97 @@ class SmoothQuantScaler:
         sq_graph_def.library.CopyFrom(self.model.graph_def.library)
         self.model.graph_def = sq_graph_def
         return self.model, self.mul_list
+
+class SmoothQuantScalerLLM(SmoothQuantScaler):
+    def __init__(self, model_path, target_path, alpha, scales_per_op):
+        """Initialization."""
+        self.alpha = alpha
+        self.model = model_path
+        self.target_path = target_path
+        self.scales_per_op = scales_per_op
+        self.mul_list = []
+
+    def _parse_weight_dict(self, max_vals_per_channel, 
+                        sq_weight_tensor_dict, op_types=['MatMul', 'Conv2D']):
+        sq_weight_tensors = {}
+        sq_weights_node_names = {}
+        for input_node_name in max_vals_per_channel:
+            curr_weight_tensors = []
+            curr_weights_node_names = []
+            next_node_names = self.graph_info[input_node_name].outputs
+            for node_name in next_node_names:
+                curr_node = self.graph_info[node_name].node
+                if curr_node.op not in op_types:
+                    continue
+                if len(curr_node.input) >= 2:
+                    weight_name = curr_node.input[1]
+                    weight_tensor = sq_weight_tensor_dict[weight_name]
+                    curr_weight_tensors.append(weight_tensor)
+                    curr_weights_node_names.append(weight_name)
+            sq_weight_tensors[input_node_name] = curr_weight_tensors
+            sq_weights_node_names[input_node_name] = curr_weights_node_names
+        return sq_weight_tensors, sq_weights_node_names
+
+    def transform(self, max_vals_per_channel, sq_weight_tensor_dict, sq_weight_node_names):
+        """Apply scaling to weights and activations based on the maximum values per channel.
+
+        Args:
+            max_vals_per_channel (dict): A dictionary containing the maximum values per channel for each input node.
+            sq_weight_tensors (dict): A dictionary containing the weight tensors for each input node.
+            sq_weights_nodes (dict): A dictionary containing the constant nodes for each input node.
+            sq_weight_node_names (dict): A dictionary from weight node name to the its concrete output node name.
+        """
+        self.graph_def, self._saved_model, self.func, self.frozen_func = parse_saved_model(self.model)
+        self.g_analyzer = GraphAnalyzer()
+        self.g_analyzer.graph = self.graph_def
+        self.graph_info = self.g_analyzer.parse_graph()
+        sq_weight_tensors, sq_weights_node_names = self._parse_weight_dict(max_vals_per_channel, 
+                                                            sq_weight_tensor_dict)
+        logger.info("Start scaling on model graph for Smooth Quantization.")
+        if self.scales_per_op:
+            # 1. obtain the smooth scale per op
+            # 2. adjust weight
+            # 3. adjust activation
+            self.sq_weight_scale_dict = {}
+            for idx, input_node_name in enumerate(max_vals_per_channel):
+                A_max_per_in_channel = max_vals_per_channel[input_node_name]
+                W_lst = sq_weight_tensors[input_node_name]  # VQK weight value
+                # Use the const nodes before to get weight values, VQK ReadVariable
+                W_node_name_lst = sq_weights_node_names[input_node_name]
+                # W_node_lst = sq_node_names[input_node_name]
+                # Get the concrete weight node as the output of Mul insertion, QKV ReadVariable
+                for w_i, W in enumerate(W_lst):
+                    if len(W.shape) == 4:
+                        # https://www.tensorflow.org/api_docs/python/tf/nn/conv2d
+                        # weight: [filter_height, filter_width, in_channels, out_channels]
+                        # activation: NHWC, also batch_shape + [in_height, in_width, in_channels]
+                        tensor = np.abs(np.transpose(W, [0, 1, 3, 2]))
+                        # reduce weight max to (in_channel, ), aligned with activation max
+                        W_max_per_in_channel = np.max(np.reshape(tensor, (-1, tensor.shape[-1])), axis=0)
+                    elif len(W.shape) == 2: # matmul
+                        # reduce weight max to (in_channel, ), aligned with activation max
+                        tensor = np.abs(W)
+                        W_max_per_in_channel = np.max(tensor, axis=1)
+                    else: # pragma: no cover
+                        assert False, "not supported"
+                    cur_weight_node_name = W_node_name_lst[w_i]
+                    try:
+                        scale = np.power(A_max_per_in_channel, self.alpha) /  \
+                                np.power(W_max_per_in_channel, (1-self.alpha))
+                    except ValueError as e: # pragma: no cover
+                        logger.info(e)
+                        logger.info("Skip smoothing the node: {}".format(cur_weight_node_name))
+                        continue
+                    # clip the scales that are too small
+                    scale = np.clip(scale, a_min=1e-5, a_max=1e8)
+                    # skip smoothing the op where scale has elements that less than 1
+                    # if np.any(scale < 1):
+                    #     logger.info("skip smooth quant: {}".format(input_node_name))
+                    #     continue
+                    self.sq_weight_scale_dict[cur_weight_node_name] = scale
+                    self._adjust_activation(1 / scale, input_node_name, sq_weight_node_names[cur_weight_node_name], w_i)
+        else:
+            pass
+        sq_graph_def = self.g_analyzer.dump_graph()
+        sq_graph_def.library.CopyFrom(self.graph_def.library)
+        return sq_graph_def, self._saved_model, self.func, self.frozen_func, self.sq_weight_scale_dict
