@@ -2,6 +2,8 @@ import argparse
 import os
 import sys
 from urllib import request
+import onnx
+from onnx import version_converter
 
 MODEL_URL = "https://github.com/onnx/models/raw/main/vision/object_detection_segmentation/ssd-mobilenetv1/model/ssd_mobilenet_v1_12.onnx"
 MAX_TIMES_RETRY_DOWNLOAD = 5
@@ -55,3 +57,8 @@ def prepare_model(input_model, output_model):
 if __name__ == "__main__":
     args = parse_arguments()
     prepare_model(args.input_model, args.output_model)
+    
+    # Convert opset version to 13 for more quantization capability.
+    model = onnx.load(args.output_model)
+    model = version_converter.convert_version(model, 13)
+    onnx.save_model(model, args.output_model)
