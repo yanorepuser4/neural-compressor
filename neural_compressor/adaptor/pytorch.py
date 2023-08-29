@@ -3651,6 +3651,7 @@ class PyTorch_FP8Adaptor(TemplateAdaptor):
         op_type_list = os.getenv('FP8_OP_TYPE_LIST')
         self.scale_method = os.getenv('SCALE_METHOD')
         self.e4m3_scale = os.getenv('E4M3_SCALE')
+        self.skip_bn = os.getenv('SKIP_BN')
         self.white_list = []
         if op_type_list:
             op_type_list = eval(op_type_list)
@@ -3697,7 +3698,8 @@ class PyTorch_FP8Adaptor(TemplateAdaptor):
 
         model_qconfig_dict = self._cfg_to_qconfig()
         # Update BN mean and var.
-        self._update_bn_statistics(q_model._model, dataloader, model_qconfig_dict)
+        if not self.skip_bn == 'True':
+            self._update_bn_statistics(q_model._model, dataloader, model_qconfig_dict)
         # Insert input observer and execute calibration with input observer.
         if self.approach == 'post_training_static_quant':
             self._prepare_observer(q_model._model, model_qconfig_dict)
@@ -3906,6 +3908,7 @@ class PyTorch_FP8Adaptor(TemplateAdaptor):
 
     def _update_bn_statistics(self, model, dataloader, model_qconfig_dict):
         ### _update BatchNorm statistics: running_mean, running_var ###
+        logger.info("Processing BatchNorm re-calibration.")
         from mpemu import qutils
         BN_Flag = False
         for child in model.modules():

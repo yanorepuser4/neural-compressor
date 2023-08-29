@@ -17,9 +17,12 @@ model:                                               # mandatory. used to specif
   name: imagenet
   framework: pytorch                                 # mandatory. supported values are tensorflow, pytorch, pytorch_ipex, onnxrt_integer, onnxrt_qlinear or mxnet; allow new framework backend extension.
 
-quantization:                                        # optional. tuning constraints on model-wise for advance user to reduce tuning space.
+quantization:
+  approach: post_training_static_quant    # no need for fp8_e5m2
+  precision: fp8_e4m3    # allowed precision is fp8_e5m2, fp8_e4m3, fp8_e3m4
   calibration:
-    sampling_size: 300                               # optional. default value is 100. used to set how many samples should be used in calibration.
+    batchnorm_sampling_size: 3000    # only needed for models w/ BatchNorm
+    sampling_size: 300
     dataloader:
       batch_size: 30
       dataset:
