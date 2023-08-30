@@ -3653,6 +3653,8 @@ class PyTorch_FP8Adaptor(TemplateAdaptor):
         self.e4m3_scale = os.getenv('E4M3_SCALE')
         self.skip_bn = os.getenv('SKIP_BN')
         self.white_list = []
+        if self.e4m3_scale == '1':
+            logger.info("E4M3 is using directly cast.")
         if op_type_list:
             op_type_list = eval(op_type_list)
             for i in op_type_list:
@@ -3908,7 +3910,6 @@ class PyTorch_FP8Adaptor(TemplateAdaptor):
 
     def _update_bn_statistics(self, model, dataloader, model_qconfig_dict):
         ### _update BatchNorm statistics: running_mean, running_var ###
-        logger.info("Processing BatchNorm re-calibration.")
         from mpemu import qutils
         BN_Flag = False
         for child in model.modules():
@@ -3918,6 +3919,7 @@ class PyTorch_FP8Adaptor(TemplateAdaptor):
         # TODO: should remove approach limit. 
         # Dynamic fp8 also need to pdate BN, but we miss dataloader.
         if BN_Flag:
+            logger.info("Processing BatchNorm re-calibration.")
             assert dataloader, "Please pass in a calibration dataloader."
             # save fp32 weight data
             fp32_model_dict = {}
