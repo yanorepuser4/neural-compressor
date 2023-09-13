@@ -282,12 +282,15 @@ class Quantizer:
 
     def should_cast(self, node):
         """Check if node should be casted."""
-        if node.name in self.config and self.config[node.name] != "fp32":  # pragma: no cover
-            parent = self.model.get_parent(node, 0)
-            if parent is not None and (parent.op_type != "Cast" or parent.attribute[0].i in [1, 10, 16]):
-                return True
-            elif parent is None and node.input[0] in self.model.input():
-                return True
+        if node.name in self.config and self.config[node.name] != 'fp32': # pragma: no cover
+            for inp_idx, inp in enumerate(node.input):
+                if find_by_name(inp, self.model.initializer()):
+                    continue
+                parent = self.model.get_parent(node, inp_idx)
+                if parent is not None and (parent.op_type != 'Cast' or parent.attribute[0].i in [1, 10, 16]):
+                    return True
+                elif parent is None and node.input[0] in self.model.input():
+                    return True
             return False
 
     def insert_qdq(self):
@@ -454,7 +457,9 @@ class Quantizer:
                     node.input[idx] = do_cast_new_tensor.name
 
                     # if origin initializer is no more used, remove it
-                    self.model.update()
+                    # TODO: model.update() will also update output_name_to_nodes, 
+                    # which will cause some ops return False in should_cast() function
+                    self.model._get_input_name_to_nodes(self.model.graph().node)
                     input_name_to_nodes = self.model.input_name_to_nodes
                     if initializer.name not in input_name_to_nodes or len(input_name_to_nodes[initializer.name]) == 0:
                         self.model.remove_initializer(initializer)
