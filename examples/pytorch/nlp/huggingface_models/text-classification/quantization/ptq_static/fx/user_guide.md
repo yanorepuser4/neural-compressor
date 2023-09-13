@@ -6,7 +6,6 @@ In this user guide, we will walk you through the steps required to set up and la
 
 - Setting Up a Kubernetes Cluster on GCP
 - The Main Difference
-- Choosing Between Autopilot and Standard Mode
 - Preparing Task Files
 - Deploying and Monitoring the Task
 
