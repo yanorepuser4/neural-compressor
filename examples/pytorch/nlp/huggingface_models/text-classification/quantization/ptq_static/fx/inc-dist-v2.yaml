@@ -1,7 +1,7 @@
 apiVersion: kubeflow.org/v1
 kind: MPIJob
 metadata:
-  name: inc-distributed-tuning-v31-1
+  name: inc-distributed-tuning-v41-1
 spec:
   slotsPerWorker: 1
   runPolicy:
@@ -12,7 +12,7 @@ spec:
       template:
         spec:
           containers:
-          - image: thion2332/inc:v31
+          - image: thion2332/inc:v41
             name: mpi-launcher
             command:
             - mpirun
@@ -55,5 +55,5 @@ spec:
       template:
         spec:
           containers:
-          - image: thion2332/inc:v31
+          - image: thion2332/inc:v41
             name: mpi-worker

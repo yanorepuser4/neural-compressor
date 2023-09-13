@@ -19,6 +19,30 @@
 
 import logging
 import os
+
+
+logger = logging.getLogger(__name__)
+
+
+def get_current_file_commit(filename):
+    import subprocess
+    try:
+        # Run the git log command to get the commit of the current file
+        commit = subprocess.check_output(['git', 'log', '-n', '1', '--', filename], universal_newlines=True)
+        return commit.strip()
+    except subprocess.CalledProcessError:
+        return None
+
+
+filename = os.path.abspath(__file__)
+
+# Print the current file's path
+print("Current file path:", filename)
+res = get_current_file_commit(filename)
+logger.info(f"Current file {filename} commit: {res}")
+
+
+import os
 import random
 import sys
 from dataclasses import dataclass, field
@@ -68,8 +92,6 @@ task_to_keys = {
     "stsb": ("sentence1", "sentence2"),
     "wnli": ("sentence1", "sentence2"),
 }
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass
