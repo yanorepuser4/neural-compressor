@@ -1,0 +1,1 @@
+mpirun -np 3 python ./run_glue.py --model_name_or_path  "textattack/distilbert-base-uncased-MRPC" --task_name  "mrpc" --do_eval --max_seq_length "128" --per_device_eval_batch_size  "16"  --no_cuda  --output_dir  "./int8_model_dir" --tune --overwrite_output_dir
