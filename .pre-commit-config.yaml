@@ -59,7 +59,7 @@ repos:
           (?x)^(
             neural_solution/.*(py|yaml|yml|sh)|
             neural_compressor/.*(py|yaml|yml|sh)|
-            neural_insights/.*(py|yaml|yml|sh)
+            neural_insights/.*(py|yaml|yml|sh)|
           )$
         exclude: |
           (?x)^(
