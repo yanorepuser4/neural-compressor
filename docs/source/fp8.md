@@ -1,7 +1,7 @@
 Emulated FP8 Quantization
 =======
 1. [Introduction](#introduction)   
-2. [Supported Framework](#supported-framwork)   
+2. [Supported Framework](#supported-framework)   
 3. [Get Start with FP8 Quantization](#get-start-with-fp8-quantization)   
     3.1. [Old API Configuration](#old-api-configuration-for-intel-neural-compressor-1x)   
     3.2. [New API Configuration](#new-api-configuration-for-intel-neural-compressor-20)  
@@ -13,18 +13,25 @@ Emulated FP8 Quantization
 Float point 8(FP8) is a promising data type for low precision quantization. In Intel Neural Compressor, the emulated FP8 quantization is supported in branch [fp8_adaptor](https://github.com/intel/neural-compressor/tree/fp8_adaptor). With specifing precision(fp8_e5m2, fp8_e4m3, fp8_e3m4), users can validate the accuracy of the quantized FP8 model.
 
 
-## Supported Framework
 
+## Supported Framework
 | Framework  | Emulated FP8 Quantization |
 |------------|:-------------------------:|
 | PyTorch    |          &#10004;         |
-| ONNX       |             WIP           |
+| ONNX       |          &#10004;         |
 
 **Note**: [FP8 Emulation Toolkit](https://github.com/IntelLabs/FP8-Emulation-Toolkit) is needed to be installed.
 
 ```
+### install mpemu
 git clone https://github.com/IntelLabs/FP8-Emulation-Toolkit.git
 cd FP8-Emulation-Toolkit  
+python setup.py install
+
+### install neural compressor
+git clone https://github.com/intel/neural-compressor.git
+cd neural-compressor
+git checkout fp8_adaptor
 python setup.py install 
 ```
 
