@@ -1,0 +1,17 @@
+*.pyc
+.vscode
+.idea
+*/__pycache__
+*.snapshot
+*.csv
+*.pb
+*.ckpt
+*.log
+*.swp
+*.swo
+*.onnx
+*.so
+*.egg-info/
+tags
+build/
+_build
