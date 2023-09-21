@@ -1,2 +1,2 @@
-from .dtype import dtype
+from .dtype import *
 from .amp import autocast

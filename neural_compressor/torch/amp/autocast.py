@@ -1,4 +1,8 @@
+from typing import Any, Optional
+
 import torch
+from torch.types import _dtype
+from ..dtype import float8_e4m3, float8_e5m2
 
 class autocast(torch.autocast):
     r"""
@@ -51,7 +55,7 @@ class autocast(torch.autocast):
         cache_enabled: Optional[bool] = None,
     ):
         if device_type == "hpu":
-            assert dtype == torch.float8_e4m3 or dtype == torch.float8_e5m2, "autocast only supports float8 e4m3 and e5m2 formats."
+            assert dtype == float8_e4m3 or dtype == float8_e5m2, "autocast only supports float8 e4m3 and e5m2 formats."
             ## TODO: add INC's fp8 implementation here ##
             pass
         else:
