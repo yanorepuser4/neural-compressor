@@ -1,3 +1,4 @@
+from setuptools import setup
 project_name = "neural_compressor"
 
 if __name__ == '__main__':
