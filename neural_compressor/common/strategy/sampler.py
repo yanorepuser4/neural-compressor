@@ -28,6 +28,21 @@ class SamplingAlgo(Enum):
     Exhaustive = "Exhaustive Sampling"
 
 
+class AnalysisManager:
+    """Analysis Manager for recording the tuning config and its corresponding evaluation result.
+    
+    This is for internal usage, the end user should not use this class directly.
+    
+    Examples:
+        >>> analysis_manager = AnalysisManager()
+        >>> base_sampler = BaseSampler(hp, analysis_manager=analysis_manager)
+        >>> for dependence_sampler in base_sampler.dependence_samplers:
+        >>>    dependence_sampler_analysis_result = analysis_manager.get_analysis_result(dependence_sampler)
+        >>>    # update the base_sampler according to the dependence_sampler_analysis_result
+        >>>    ...
+    """
+    #TODO
+
 class BaseSampler:
     """Base class for all samplers.
 
