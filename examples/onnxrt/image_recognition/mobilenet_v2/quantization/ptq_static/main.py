@@ -295,12 +295,13 @@ if __name__ == "__main__":
         accuracy_criterion = AccuracyCriterion()
         accuracy_criterion.relative = 0.03
 
+        alpha_lst = [0.05, 0.25, 0.5, 0.75, 0.95]
         config = PostTrainingQuantConfig(
             quant_format=args.quant_format,
             accuracy_criterion=accuracy_criterion,
             recipes={
                 "smooth_quant": True,
-                "smooth_quant_args": {"alpha": 0.5},
+                "smooth_quant_args": {"alpha": alpha_lst},
                 }
             )
  
