@@ -297,7 +297,12 @@ if __name__ == "__main__":
 
         config = PostTrainingQuantConfig(
             quant_format=args.quant_format,
-            accuracy_criterion=accuracy_criterion)
+            accuracy_criterion=accuracy_criterion,
+            recipes={
+                "smooth_quant": True,
+                "smooth_quant_args": {"alpha": 0.5},
+                }
+            )
  
         q_model = quantization.fit(model, config, calib_dataloader=dataloader,
 			     eval_func=eval)
