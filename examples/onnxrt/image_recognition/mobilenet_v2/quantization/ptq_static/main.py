@@ -295,7 +295,8 @@ if __name__ == "__main__":
         accuracy_criterion = AccuracyCriterion()
         accuracy_criterion.relative = 0.03
 
-        alpha_lst = [0.05, 0.25, 0.5, 0.75, 0.95]
+        # alpha_lst = [0.05, 0.25, 0.5, 0.75, 0.95]
+        alpha_lst = [0.01, 0.02, 0.03, 0.04, 0.05]
         config = PostTrainingQuantConfig(
             quant_format=args.quant_format,
             accuracy_criterion=accuracy_criterion,
