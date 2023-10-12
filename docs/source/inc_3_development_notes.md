@@ -6,12 +6,15 @@
     - [x] Base sampler
     - [ ] Dependency sampler 
 - [] Objective
+    - Handle general stop
+    - Handle the O0 stop
 - [] Metric
 
 ### Change
 - Removed `query_capability`
     - The adaptor registers its own `sampler`
-
+- `eval_metric` and `eval_dataloader`
+    - if user pass `eval_metric` and `eval_dataloader` instead of `eval_func`, adaptor needs to construct the `eval_func` corresponding and pass it to the strategy
 
 ### Open
 - change `strategy` into `tuner`?

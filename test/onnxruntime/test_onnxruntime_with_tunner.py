@@ -5,8 +5,7 @@ from neural_compressor.common.strategy.search_space import HyperParams
 
 class TestOrtWithTuner(unittest.TestCase):
     def test_interface(self):
-        """An simple demo to test the interface between ORT and tuner.
-        """
+        """A simple demo to test the interface between ORT and tuner."""
         from neural_compressor.onnxruntime.utility import (
             get_demo_model, 
             get_dummy_dataloader,

@@ -68,6 +68,14 @@ class ORTQuantizer(IncQuantizer):
         """Evaluate the model and return the accuracy."""
         logger.info("Evaluating model: {}".format(model))
         return FAKE_EVAL_RESULT
+    
+    def report_result(self, model):
+        """Evaluate the current model and report the result to strategy.
+        
+        Args:
+            model: the quantized model or fp32 model.
+        """
+        pass
 
     def tuning(self):
         """Try to find the best quantization config and return the corresponding model.

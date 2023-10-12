@@ -119,37 +119,6 @@ class BaseSampler:
         """Generate a list of configs."""
         for config in self.hp.exapnd():
             yield config
-            
-    def need_stop(self, acc) -> bool:
-        """Determine whether to stop sampling.
-
-        The different sampler may have different stop criterion.
-        TODO
-        The different sampler may have different stop criterion.
-        quant_level = 0, continue sampling even if the accuracy is not satisfied.
-        quant_level = 1 with basic, stop sampling if the accuracy is satisfied.
-        
-        # exit policy
-        1. not_tuning(performance_only): only quantize the model without tuning or evaluation.
-        2. timeout = 0, exit the tuning process once it is found model meets the accuracy requirement.
-        3. max_trials, the number of the actually trials is less or equal to the max_trials
-        4. quant_level = 0, to seek the better performance, continue the tuning process even if the accuracy is satisfied.
-        There are two ways to use max_trials to dominate the exit policy.
-        1) timeout = 0, the tuning process exit when the actual_trails_count >= max_trials or
-           a quantized model meets the accuracy requirements
-        2) timeout = inf, the tuning process exit until the trials_count >= max_trials
-        Some use case:
-        1) Ending tuning process after a quantized model meets the accuracy requirements
-           max_trials = inf, timeout = 0 (by default) # the default max_trials is 100
-        value of timeout. max_trials control the exit policy
-        2) Even after finding a model that meets the accuracy goal, we may want to continue the
-           tuning process for better performance or other objectives.
-           timeout = 100000 (seconds), max_trials = 10 # Specifics a fairly large timeout, use max_trials
-                                             # to control the exit policy.
-        3) Only want to try a certain number of trials
-           timeout = 100000 (seconds), max_trials = 3 # only want to try the first 3 trials
-        """
-        return False
 
 class GenericSampler(BaseSampler):
     """Generic sampler.

@@ -59,66 +59,66 @@ class TuningConfig:
         - max_trials
     """
 
-# class TuningCriterion:
-#     """Class for Tuning Criterion.
+class TuningCriterion:
+    """Class for Tuning Criterion.
 
-#     Args:
-#         strategy: Strategy name used in tuning. Please refer to docs/source/tuning_strategies.md.
-#         strategy_kwargs: Parameters for strategy. Please refer to docs/source/tuning_strategies.md.
-#         objective: String or dict. Objective with accuracy constraint guaranteed. String value supports
-#                   'performance', 'modelsize', 'footprint'. Default value is 'performance'.
-#                    Please refer to docs/source/objective.md.
-#         timeout: Tuning timeout (seconds). Default value is 0 which means early stop.
-#         max_trials: Max tune times. Default value is 100. Combine with timeout field to decide when to exit.
+    Args:
+        strategy: Strategy name used in tuning. Please refer to docs/source/tuning_strategies.md.
+        strategy_kwargs: Parameters for strategy. Please refer to docs/source/tuning_strategies.md.
+        objective: String or dict. Objective with accuracy constraint guaranteed. String value supports
+                  'performance', 'modelsize', 'footprint'. Default value is 'performance'.
+                   Please refer to docs/source/objective.md.
+        timeout: Tuning timeout (seconds). Default value is 0 which means early stop.
+        max_trials: Max tune times. Default value is 100. Combine with timeout field to decide when to exit.
 
-#     Example::
-#         from neural_compressor.config import TuningCriterion
+    Example::
+        from neural_compressor.config import TuningCriterion
 
-#         tuning_criterion=TuningCriterion(
-#             timeout=0,
-#             max_trials=100,
-#             strategy="basic",
-#             strategy_kwargs=None,
-#         )
-#     """
+        tuning_criterion=TuningCriterion(
+            timeout=0,
+            max_trials=100,
+            strategy="basic",
+            strategy_kwargs=None,
+        )
+    """
 
-#     def __init__(self, strategy="basic", strategy_kwargs=None, timeout=0, max_trials=100, objective="performance"):
-#         """Init a TuningCriterion object."""
-#         self.strategy = strategy
-#         self.timeout = timeout
-#         self.max_trials = max_trials
-#         self.objective = objective
-#         self.strategy_kwargs = strategy_kwargs
+    def __init__(self, strategy="basic", strategy_kwargs=None, timeout=0, max_trials=100, objective="performance"):
+        """Init a TuningCriterion object."""
+        self.strategy = strategy
+        self.timeout = timeout
+        self.max_trials = max_trials
+        self.objective = objective
+        self.strategy_kwargs = strategy_kwargs
 
-# tuning_criterion = TuningCriterion()
+tuning_criterion = TuningCriterion()
 
 
-# class AccuracyCriterion:
-#     """Class of Accuracy Criterion.
+class AccuracyCriterion:
+    """Class of Accuracy Criterion.
 
-#     Args:
-#         higher_is_better(bool, optional): This flag indicates whether the metric higher is the better.
-#                                           Default value is True.
-#         criterion:(str, optional): This flag indicates whether the metric loss is 'relative' or 'absolute'.
-#                                    Default value is 'relative'.
-#         tolerable_loss(float, optional): This float indicates how much metric loss we can accept.
-#                                          Default value is 0.01.
+    Args:
+        higher_is_better(bool, optional): This flag indicates whether the metric higher is the better.
+                                          Default value is True.
+        criterion:(str, optional): This flag indicates whether the metric loss is 'relative' or 'absolute'.
+                                   Default value is 'relative'.
+        tolerable_loss(float, optional): This float indicates how much metric loss we can accept.
+                                         Default value is 0.01.
 
-#     Example::
+    Example::
 
-#         from neural_compressor.config import AccuracyCriterion
+        from neural_compressor.config import AccuracyCriterion
 
-#         accuracy_criterion = AccuracyCriterion(
-#             higher_is_better=True,  # optional.
-#             criterion='relative',  # optional. Available values are 'relative' and 'absolute'.
-#             tolerable_loss=0.01,  # optional.
-#         )
-#     """
+        accuracy_criterion = AccuracyCriterion(
+            higher_is_better=True,  # optional.
+            criterion='relative',  # optional. Available values are 'relative' and 'absolute'.
+            tolerable_loss=0.01,  # optional.
+        )
+    """
 
-#     def __init__(self, higher_is_better=True, criterion="relative", tolerable_loss=0.01):
-#         """Init an AccuracyCriterion object."""
-#         self.higher_is_better = higher_is_better
-#         self.criterion = criterion
-#         self.tolerable_loss = tolerable_loss
+    def __init__(self, higher_is_better=True, criterion="relative", tolerable_loss=0.01):
+        """Init an AccuracyCriterion object."""
+        self.higher_is_better = higher_is_better
+        self.criterion = criterion
+        self.tolerable_loss = tolerable_loss
 
-# accuracy_criterion = AccuracyCriterion()
+accuracy_criterion = AccuracyCriterion()
