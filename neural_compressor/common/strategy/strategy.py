@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import List
+from typing import List, Set
 
 from neural_compressor.common.strategy.sampler import BaseSampler
 from neural_compressor.utils import logger
@@ -20,7 +20,7 @@ from neural_compressor.utils import logger
 
 class Strategy:
     def __init__(self, fp32_model, tuning_config) -> None:
-        self.sampler_set = set()
+        self.sampler_set: Set[BaseSampler] = set()
 
     def add_sampler(self, sampler: BaseSampler):
         self.sampler_set.add(sampler)
@@ -43,6 +43,6 @@ class Strategy:
             for config in cur_sampler:
                 q_model = quantizer.internal_quantize(config)
                 acc = quantizer.evaluate(q_model)
-                if self.need_stop(acc):
+                if cur_sampler.need_stop(acc):
                     return q_model
             logger.info("*" * 40)
