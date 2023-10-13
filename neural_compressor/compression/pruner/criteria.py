@@ -160,15 +160,27 @@ class SnipCriterion(PruningCriterion):
     def on_before_optimizer_step(self):
         """Calculate and store the pruning scores based on snip criterion."""
         with torch.no_grad():
-            for key in self.modules.keys():
-                p = self.modules[key].weight
-                # self.scores[key] = torch.abs(p * p.grad)
-                if hasattr(self.pattern, "reduce_score"):
-                    self.scores[key] = self.pattern.reduce_score(torch.abs(p * p.grad), key)
-                else:
-                    self.scores[key] = torch.abs(p * p.grad)
-
-
+            if hasattr(self.modules, "keys"):
+                for key in self.modules.keys():
+                    p = self.modules[key].weight
+                    # self.scores[key] = torch.abs(p * p.grad)
+                    if hasattr(self.pattern, "reduce_score"):
+                        self.scores[key] = self.pattern.reduce_score(torch.abs(p * p.grad), key)
+                    else:
+                        self.scores[key] = torch.abs(p * p.grad)
+            elif hasattr(self.modules, "named_parameters"):
+                # access param and grad when using the DeepSpeed ZeRO stage 3 optimizer
+                # https://deepspeed.readthedocs.io/en/latest/zero3.html#deepspeed.utils.safe_get_full_optimizer_state
+                for name, param in self.modules.named_parameters():
+                    if hasattr(param, 'ds_id'):
+                        p_grad =  param._z3_optimizer.get_fp32_grad_for_param(param)
+                        if hasattr(self.pattern, "reduce_score"):
+                            self.scores[name] = self.pattern.reduce_score(torch.abs(param * p_grad.grad), param)
+                        else:
+                            self.scores[name] = torch.abs(param * p_grad)
+            else:
+                raise NotImplementedError
+            
 @register_criterion("snip_momentum")
 class SnipMomentumCriterion(PruningCriterion):
     """Pruning criterion.
