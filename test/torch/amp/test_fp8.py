@@ -51,12 +51,10 @@ class TestPytorchWeightOnlyAdaptor(unittest.TestCase):
 
         with autocast('hpu', dtype=float8_e5m2):
             e5m2_out = m(inp)
-            print(e5m2_out)
 
         # wrong output, e4m2 env varible should be set at the beginning
         with autocast('hpu', dtype=float8_e4m3):
             e4m3_out = m(inp)
-            print(e4m3_out)
 
     def test_module_wrapper(self):
         from neural_compressor.torch.amp.modules.fp8_modules import reset_FP8_linear
