@@ -1,10 +1,12 @@
 from typing import Any, Optional
 
+import os
 import torch
 from torch.types import _dtype
-from ..dtype import float8_e4m3, float8_e5m2
+from neural_compressor.torch.dtype import float8_e4m3, float8_e5m2
 
-class autocast(torch.autocast):
+
+class autocast:
     r"""
     Instances of :class:`autocast` serve as context managers or decorators that
     allow regions of your script to run in mixed precision.
@@ -54,9 +56,31 @@ class autocast(torch.autocast):
         enabled: bool = True,
         cache_enabled: Optional[bool] = None,
     ):
-        if device_type == "hpu":
-            assert dtype == float8_e4m3 or dtype == float8_e5m2, "autocast only supports float8 e4m3 and e5m2 formats."
-            ## TODO: add INC's fp8 implementation here ##
-            pass
+        self.device = device_type
+        if dtype is not None:
+            self.fast_dtype = dtype
+        if cache_enabled is not None:
+            self._cache_enabled = cache_enabled
+        if device_type == "hpu" and dtype in [float8_e4m3, float8_e5m2]:
+            if dtype == float8_e4m3:
+                os.environ["PT_USE_FP8_143"] = str(1)
+            else:
+                os.environ.pop("PT_USE_FP8_143", None)
         else:
-            torch.autocast(device_type, dtype, enabled, cache_enabled)
+            self._autocast = torch.autocast(device_type, dtype, enabled, cache_enabled)
+
+    def __enter__(self) -> None:
+        if self.device == "hpu" and self.fast_dtype in [float8_e4m3, float8_e5m2]:
+            from neural_compressor.torch.amp.modules.fp8_functions import replace_func
+            # This function will replace F.linear and torch.matmul with the fp8 one
+            replace_func()
+        else:
+            self._autocast.__enter__()
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        if self.device == "hpu" and self.fast_dtype in [float8_e4m3, float8_e5m2]:
+            from neural_compressor.torch.amp.modules.fp8_functions import recover_func
+            # This function will recover F.linear and torch.matmul with the original one
+            recover_func()
+        else:
+            self._autocast.__exit__(exc_type, exc_value, traceback)
