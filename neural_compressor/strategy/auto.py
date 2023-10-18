@@ -126,9 +126,8 @@ class AutoTuneStrategy(TuneStrategy):
                 yield tune_cfg
 
         # try to tune weight only
-        import pdb;pdb.set_trace()
+        print('should_tuning_woq', self._should_tuning_woq(self.config.op_type_dict))
         if self._should_tuning_woq(self.config.op_type_dict):
-            import pdb;pdb.set_trace()
             for tune_cfg in self.tuning_woq(tuning_space, deepcopy(self.cur_best_tuning_cfg), self.config.op_type_dict):
                 yield tune_cfg
 

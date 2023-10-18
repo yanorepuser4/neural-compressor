@@ -5,6 +5,7 @@ import unittest
 
 import numpy as np
 import onnx
+import copy
 import onnxruntime as ort
 from transformers import AutoTokenizer
 
@@ -43,12 +44,12 @@ class TestWeightOnlyAdaptor(unittest.TestCase):
         p.communicate()
 
         self.model = onnx.load("gptj/decoder_model.onnx")
-        self.dataloader = DummyNLPDataloader("hf-internal-testing/tiny-random-gptj")
+        self.dataloader = DummyNLPDataloader("gptj")
 
     @classmethod
     def tearDownClass(self):
         shutil.rmtree("nc_workspace", ignore_errors=True)
-        shutil.rmtree("gptj", ignore_errors=True)
+        # shutil.rmtree("gptj", ignore_errors=True)
 
     def test_RTN_quant(self):
         conf = PostTrainingQuantConfig(
@@ -265,6 +266,94 @@ class TestWeightOnlyAdaptor(unittest.TestCase):
         ]
         self.assertTrue(len(rtn_op_names) + 1, len(gptq_op_names))
 
+    def _test_woq_tune_common(self, eval_func, quant_level=1, **kwargs):
+        from neural_compressor import quantization
+        from neural_compressor.config import PostTrainingQuantConfig, TuningCriterion
+        tuning_criterion = TuningCriterion(max_trials=5)
+
+        fp32_model = copy.deepcopy(self.model)
+        conf = PostTrainingQuantConfig(
+            approach="weight_only",
+            quant_level=quant_level,
+            tuning_criterion=tuning_criterion,
+            **kwargs
+        )
+        q_model = quantization.fit(
+            fp32_model,
+            conf,
+            calib_dataloader=self.dataloader,
+            eval_func=eval_func,
+        )
+        self.assertIsNotNone(q_model)
+        return q_model
+    
+    def _count_woq_matmul(self, q_model, bits=4, group_size=32):
+        op_names = [
+            i.name for i in q_model.nodes() if i.op_type.startswith("MatMul") and i.input[1].endswith("_Q{}G{}".format(bits, group_size))
+        ]
+        return len(op_names)
+    
+    def _count_int8_matmul(self, q_model):
+        op_names = [
+            i.name for i in q_model.nodes() if i.op_type.startswith("MatMul") and i.input[1].endswith("_Q8G32")
+        ]
+        return len(op_names)
+
+    def test_woq_tune(self):
+        from functools import partial
+        def fake_eval(model, eval_result_lst):
+            acc = eval_result_lst.pop(0)
+            return acc
+
+        quant_levels = ["auto"]
+        for quant_level in quant_levels:
+            # RTN_G32ASYM
+            partial_fake_eval = partial(fake_eval, eval_result_lst = [1, 1.1])
+            woq_model_1 = self._test_woq_tune_common(partial_fake_eval, quant_level)
+            self.assertEqual(self._count_woq_matmul(woq_model_1), 31)
+            import pdb;pdb.set_trace()
+
+            # GPTQ_G32ASYM
+            partial_fake_eval = partial(fake_eval, eval_result_lst = [1, 0.8, 1.1])
+            woq_model_2 = self._test_woq_tune_common(partial_fake_eval, quant_level)
+            self.assertEqual(self._count_woq_matmul(woq_model_2), 31)
+            import pdb;pdb.set_trace()
+
+            # GPTQ_G32ASYM_DISABLE_LAST_MATMUL
+            partial_fake_eval = partial(fake_eval, eval_result_lst = [1, 0.8, 0.8, 1.1])
+            woq_model_3 = self._test_woq_tune_common(partial_fake_eval, quant_level)
+            self.assertEqual(self._count_woq_matmul(woq_model_3), 30)
+            import pdb;pdb.set_trace()
+
+            # GPTQ_G128ASYM
+            partial_fake_eval = partial(fake_eval, eval_result_lst = [1, 0.8, 0.8, 0.8, 1.1])
+            woq_model_4 = self._test_woq_tune_common(partial_fake_eval, quant_level)
+            self.assertEqual(self._count_woq_matmul(woq_model_4, group_size=128), 31)
+            import pdb;pdb.set_trace()
+
+            # AWQ_G32ASYM
+            partial_fake_eval = partial(fake_eval, eval_result_lst = [1, 0.8, 0.8, 0.8, 0.8, 1.1])
+            woq_model_5 = self._test_woq_tune_common(partial_fake_eval, quant_level)
+            self.assertEqual(self._count_woq_matmul(woq_model_5), 31)
+            import pdb;pdb.set_trace()
+
+        # with fallback
+        from neural_compressor.utils.constant import FP32
+        partial_fake_eval = partial(fake_eval, eval_result_lst = [1, 1.1])
+        woq_model = self._test_woq_tune_common(partial_fake_eval, 
+                                               "auto", 
+                                                op_name_dict={"/transformer/h.*/attn/k_proj/MatMul": FP32})
+        self.assertEqual(self._count_woq_matmul(woq_model), 26)
+
+
+        # 8 bits woq
+        woq_model = self._test_woq_tune_common(partial_fake_eval, 
+                                               "auto",
+                                                op_type_dict={'.*': {'weight': {'bits': 8}}})
+        self.assertEqual(self._count_woq_matmul(woq_model, bits=8), 31)
+            
+
+        
 
 if __name__ == "__main__":
     unittest.main()
