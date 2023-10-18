@@ -1639,6 +1639,7 @@ class ONNXRT_WeightOnlyAdaptor(ONNXRUNTIMEAdaptor):
         self.quantizable_ops = self._query_quantizable_ops(model.model)
 
         quant_config = self._cfg_to_quantize_config(tune_cfg)
+        import pdb;pdb.set_trace()
         algos = set([item["algorithm"] for key, item in quant_config.items() if isinstance(item, dict)])
         if "GPTQ" in algos:
             from neural_compressor.adaptor.ox_utils.weight_only import gptq_quantize
@@ -1734,6 +1735,8 @@ class ONNXRT_WeightOnlyAdaptor(ONNXRUNTIMEAdaptor):
         self.optype_statistics = field_names, output_data
 
     def _cfg_to_quantize_config(self, tune_cfg):
+        tune_cfg = self._update_tune_cfg(tune_cfg)
+
         quantize_config = {}
         quantize_config["calib_iteration"] = tune_cfg["calib_iteration"]
 
@@ -1746,6 +1749,18 @@ class ONNXRT_WeightOnlyAdaptor(ONNXRUNTIMEAdaptor):
                 quantize_config[op.name] = copy.deepcopy(tune_cfg["op"][(op.name, op.op_type)]["weight"])
 
         return quantize_config
+    
+    def _update_tune_cfg(self, tune_cfg):
+        if tune_cfg.get("woq_tuning_cfg") is None:
+            return tune_cfg
+        
+        from neural_compressor.strategy.utils.constant import WOQ_TUNING_LST
+        new_woq_cfg = WOQ_TUNING_LST.get(tune_cfg.get("woq_tuning_cfg"))
+
+        for node_cfg in tune_cfg["op"].values():
+            node_cfg["weight"].update({cfg_name: cfg_value \
+                for cfg_name, cfg_value in new_woq_cfg.items() if cfg_name in node_cfg["weight"]})
+        return tune_cfg
 
     def query_fw_capability(self, model):
         """The function is used to query framework capability.

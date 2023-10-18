@@ -81,3 +81,11 @@ class WoqTuningParams(Enum):
     GPTQ_GROUP_SIZE_32 = 4
     GPTQ_GROUP_SIZE_128 = 5
     AWQ = 6
+
+WOQ_TUNING_LST = {
+    # "RTN_G32ASYM": {"algorithm": "RTN", "group_size": 32, "scheme": "asym"},
+    "GPTQ_G32ASYM": {"algorithm": "GPTQ", "group_size": 32, "scheme": "asym"},
+    "GPTQ_G32ASYM_DISABLE_LAST_MATMUL": {"algorithm": "GPTQ", "group_size": 32, "scheme": "asym"},
+    "GPTQ_G128ASYM": {"algorithm": "GPTQ", "group_size": 32, "scheme": "asym"},
+    "AWQ_G32ASYM": {"algorithm": "AWQ", "group_size": 32, "scheme": "asym"},
+}

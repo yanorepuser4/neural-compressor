@@ -1153,6 +1153,30 @@ class TuneStrategy(metaclass=TuneStrategyMeta):
         for tune_cfg in sq_sampler:
             yield tune_cfg
 
+    def _should_tuning_woq(self, op_type_dict):
+        if op_type_dict is not None and any('algorithm' in inner_dict['weight'] for inner_dict in op_type_dict.values()):
+            return False
+        else:
+            return True
+
+    def tuning_woq(self, tuning_space, tuning_cfg, op_type_dict):
+        """Tuning smooth quant's alpha.
+
+        Args:
+            tuning_space: tuning space
+            tuning_cfg: the initial tuning config
+            recipes: recipes specified by user
+
+        Yields:
+            tuning config
+        """
+        from .utils.tuning_sampler import tuning_sampler_dict
+        logger.info("[STRATEGY] Start tuning weight only.")
+        sq_sampler = tuning_sampler_dict.get_class("weight_only")(tuning_space, [], tuning_cfg)
+        for tune_cfg in sq_sampler:
+            yield tune_cfg
+
+
     def initial_dynamic_cfg_based_on_static_cfg(self, op_static_cfg: OpTuningConfig):
         """Init the dynamic tuning config according to the static config.
 

@@ -125,6 +125,13 @@ class AutoTuneStrategy(TuneStrategy):
             for tune_cfg in self.tuning_sq_alpha(tuning_space, deepcopy(self.cur_best_tuning_cfg), self.config.recipes):
                 yield tune_cfg
 
+        # try to tune weight only
+        import pdb;pdb.set_trace()
+        if self._should_tuning_woq(self.config.op_type_dict):
+            import pdb;pdb.set_trace()
+            for tune_cfg in self.tuning_woq(tuning_space, deepcopy(self.cur_best_tuning_cfg), self.config.op_type_dict):
+                yield tune_cfg
+
         logger.info("Quantize the model with default config.")
         yield op_tuning_cfg
 

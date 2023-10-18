@@ -21,7 +21,7 @@ from copy import deepcopy
 
 from ..utils import logger
 from .strategy import TuneStrategy, strategy_registry
-from .utils.constant import LOWER_BIT_LIST, PRECISION_LIST, WoqTuningParams
+from .utils.constant import LOWER_BIT_LIST, PRECISION_LIST
 from .utils.tuning_sampler import (
     BlockFallbackTuningSampler,
     FallbackTuningSampler,
@@ -315,17 +315,18 @@ class BasicTuneStrategy(TuneStrategy):
                 self.cur_best_tuning_cfg = deepcopy(initial_op_tuning_cfg)
 
             # try to tune a WeightOnlyQuant algorithm
-            woq_tuning_sampler = WeightOnlyQuantSampler(
-                tuning_space,
-                tuning_order_lst=[],
-                initial_op_tuning_cfg=initial_op_tuning_cfg,
-            )
-            for tune_cfg in woq_tuning_sampler:
-                yield tune_cfg
-            logger.info(
-                "[Strategy] The best tuning config with WeightOnlyQuant is"
-                f"{self.cur_best_tuning_cfg['woq_tuning_cfg']}."
-            )
+            # if self._should_tuning_woq(self.config.recipes):
+            #     woq_tuning_sampler = WeightOnlyQuantSampler(
+            #         tuning_space,
+            #         tuning_order_lst=[],
+            #         initial_op_tuning_cfg=initial_op_tuning_cfg,
+            #     )
+            #     for tune_cfg in woq_tuning_sampler:
+            #         yield tune_cfg
+            #     logger.info(
+            #         "[Strategy] The best tuning config with WeightOnlyQuant is"
+            #         f"{self.cur_best_tuning_cfg['woq_tuning_cfg']}."
+            #     )
 
             # try to tune sq alpha
             if self._should_tuning_sq_alpha(self.config.recipes):
