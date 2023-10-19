@@ -25,11 +25,11 @@ def get_default_quant_config():
     return FakeQuantConfig()
 
 
-def get_default_tuning_config():
+def get_default_tuning_criterion():
     return FakeTuningConfig()
 
 
-def get_default_quant_with_tuning_config():
+def get_default_quant_with_tuning_criterion():
     return FakeQuantConfig()
 
 

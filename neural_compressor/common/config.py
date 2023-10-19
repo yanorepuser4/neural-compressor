@@ -22,13 +22,16 @@ class BasicSamplerConfig:
     priority = 100
     max_trials = MAX_TRIALS_EACH_SAMPLER
 
+
 class SmoothQuantSamplerConfig(BasicSamplerConfig):
     alpha = [0.5]
+
 
 class OpTypeWiseSamplerConfig(BasicSamplerConfig):
     priority = 10
     op_types = []
-    
+
+
 class OptimizationLevelSamplerConfig(BasicSamplerConfig):
     priority = 100
     optimization_levels = []
@@ -42,7 +45,7 @@ optimization_level_sampler_config = OptimizationLevelSamplerConfig()
 
 class TuningConfig:
     """Tuning Config class.
-    
+
     TuningConfig class is used to configure the trials order, accuracy constraint and exit policy.
     Note: The TuningConfig class merges the main functionalities of TuningCriterion and AccuracyCriterion of INC 2.x.
 
@@ -58,6 +61,9 @@ class TuningConfig:
         - timeout
         - max_trials
     """
+
+    pass
+
 
 class TuningCriterion:
     """Class for Tuning Criterion.
@@ -90,6 +96,7 @@ class TuningCriterion:
         self.objective = objective
         self.strategy_kwargs = strategy_kwargs
 
+
 tuning_criterion = TuningCriterion()
 
 
@@ -120,5 +127,6 @@ class AccuracyCriterion:
         self.higher_is_better = higher_is_better
         self.criterion = criterion
         self.tolerable_loss = tolerable_loss
+
 
 accuracy_criterion = AccuracyCriterion()

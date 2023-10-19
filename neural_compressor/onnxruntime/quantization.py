@@ -16,19 +16,17 @@ from enum import Enum
 
 import onnxruntime as ort
 
+from neural_compressor.common.config import (
+    basic_sampler_config,
+    op_type_wise_sampler_config,
+    optimization_level_sampler_config,
+    smooth_quant_sampler_config,
+)
+from neural_compressor.common.strategy.sampler import BaseSampler
+from neural_compressor.common.strategy.search_space import HyperParams
 from neural_compressor.onnxruntime.utility import FAKE_EVAL_RESULT, FakeModel
 from neural_compressor.quantize import IncQuantizer
 from neural_compressor.utils import logger
-
-from neural_compressor.common.strategy.sampler import BaseSampler
-from neural_compressor.common.strategy.search_space import HyperParams
-
-from neural_compressor.common.config import (
-    basic_sampler_config, 
-    smooth_quant_sampler_config, 
-    op_type_wise_sampler_config,
-    optimization_level_sampler_config)
-
 
 
 class OptimizationLevel(Enum):
@@ -41,15 +39,30 @@ class OptimizationLevel(Enum):
 
 
 class ORTQuantizer(IncQuantizer):
-    def __init__(self, fp32_model, calib_dataloader, quant_config, tuning_config=None) -> None:
+    def __init__(
+        self,
+        fp32_model,
+        calib_dataloader,
+        quant_config,
+        tuning_criterion=None,
+        accuracy_criterion=None,
+        eval_func=None,
+        **kwargs
+    ) -> None:
         self.fp32_model = fp32_model
         self.calib_dataloader = calib_dataloader
         self.quant_config = quant_config
-        self.tuning_config = tuning_config
+        self.tuning_criterion = tuning_criterion
+        self.accuracy_criterion = accuracy_criterion
+        self._eval_func = eval_func
 
     def need_tuning(self) -> bool:
         """Whether the quantizer needs tuning."""
-        return self.tuning_config is not None
+        return (
+            (self.tuning_criterion is not None)
+            and (self.accuracy_criterion is not None)
+            and (self._eval_func is not None)
+        )
 
     def _parse_user_config_into_q_config(self, quant_config):
         return quant_config
@@ -67,11 +80,12 @@ class ORTQuantizer(IncQuantizer):
     def evaluate(self, model) -> float:
         """Evaluate the model and return the accuracy."""
         logger.info("Evaluating model: {}".format(model))
+        self._eval_func(model)
         return FAKE_EVAL_RESULT
-    
+
     def report_result(self, model):
         """Evaluate the current model and report the result to strategy.
-        
+
         Args:
             model: the quantized model or fp32 model.
         """
@@ -96,7 +110,12 @@ class ORTQuantizer(IncQuantizer):
     def init_strategy(self):
         from neural_compressor.common.strategy import Strategy
 
-        strategy = Strategy(self.fp32_model, self.tuning_config)
+        strategy = Strategy(
+            baseline_model=self.fp32_model,
+            accuracy_criterion=self.accuracy_criterion,
+            tuning_criterion=self.tuning_criterion,
+            eval_func=self._eval_func,
+        )
         return strategy
 
     def register_custom_samplers(self, strategy) -> None:
@@ -120,23 +139,17 @@ class ORTQuantizer(IncQuantizer):
             },
         )
         opt_level_sampler = BaseSampler(
-            hp=opt_level_hp,
-            name="ort_graph_opt_level",
-            priority=optimization_level_sampler_config.priority
-            )
+            hp=opt_level_hp, name="ort_graph_opt_level", priority=optimization_level_sampler_config.priority
+        )
         strategy.add_sampler(opt_level_sampler)
-        
+
         ############################################
         # add sq sampler
         ############################################
         # assume the sq alpha is a list of float
         sq_alpha = smooth_quant_sampler_config.alpha
         sq_hp = HyperParams(name="sq_alpha", params_space={"alpha": sq_alpha})
-        sq_sampler = BaseSampler(
-            hp=sq_hp,
-            name="sq_alpha",
-            priority=smooth_quant_sampler_config.priority
-            )
+        sq_sampler = BaseSampler(hp=sq_hp, name="sq_alpha", priority=smooth_quant_sampler_config.priority)
         strategy.add_sampler(sq_sampler)
 
 
@@ -147,10 +160,12 @@ def quantize(
     calib_func=None,
     eval_func=None,
     eval_metric=None,
-    tuning_config=None,
-    **kwargs):
-    """ The main entrance for user to quantize model.
-    
+    tuning_criterion=None,
+    accuracy_criterion=None,
+    **kwargs
+):
+    """The main entrance for user to quantize model.
+
     Args:
         fp32_model: _description_
         quant_config: _description_
@@ -158,10 +173,19 @@ def quantize(
         calib_func: _description_. Defaults to None.
         eval_func: _description_. Defaults to None.
         eval_metric: _description_. Defaults to None.
-        tuning_config: _description_. Defaults to None.
+        tuning_criterion: _description_. Defaults to None.
+        accuracy_criterion: _description_. Defaults to None.
 
     Returns:
         Quantized model.
     """
-    quantizer = ORTQuantizer(fp32_model, calib_dataloader, quant_config, tuning_config)
+    quantizer = ORTQuantizer(
+        fp32_model=fp32_model,
+        calib_dataloader=calib_dataloader,
+        quant_config=quant_config,
+        tuning_criterion=tuning_criterion,
+        accuracy_criterion=accuracy_criterion,
+        eval_func=eval_func,
+        **kwargs
+    )
     return quantizer.quantize()
