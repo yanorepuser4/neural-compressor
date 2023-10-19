@@ -6,7 +6,7 @@ Intel® Neural Compressor validated examples with multiple compression technique
 # Quick Get Started Notebook Examples
 * [Quick Get Started Notebook of Intel® Neural Compressor for ONNXRuntime](/examples/notebook/onnxruntime/Quick_Started_Notebook_of_INC_for_ONNXRuntime.ipynb)
 
-* [Quick Get Started Notebook of Intel® Neural Compressor for Tensorflow](examples/notebook/tensorflow/resnet/resnet_quantization.ipynb)
+* [Quick Get Started Notebook of Intel® Neural Compressor for Tensorflow](/examples/notebook/tensorflow/resnet/resnet_quantization.ipynb)
 
 # Helloworld Examples
 
@@ -507,6 +507,12 @@ Intel® Neural Compressor validated examples with multiple compression technique
     <td>Speech Recognition</td>
     <td>Post-Training Dynamic Quantization</td>
     <td><a href="./pytorch/speech_recognition/torchaudio_models/quantization/ptq_dynamic/fx">fx</a></td>
+  </tr>
+  <tr>
+    <td>RNNT</td>
+    <td>Speech Recognition</td>
+    <td>Post-Training Dynamic Quantization</td>
+    <td><a href="./pytorch/speech_recognition/rnnt/quantization/ptq_dynamic/fx">fx</a></td>
   </tr>
   <tr>
     <td>BlendCNN</td>
