@@ -46,6 +46,7 @@ optimization_level_sampler_config = OptimizationLevelSamplerConfig()
 class TuningConfig:
     """Tuning Config class.
 
+    #TODO(Yi) should we use TuningConfig to replace TuningCriterion and AccuracyCriterion?
     TuningConfig class is used to configure the trials order, accuracy constraint and exit policy.
     Note: The TuningConfig class merges the main functionalities of TuningCriterion and AccuracyCriterion of INC 2.x.
 

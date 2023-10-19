@@ -27,14 +27,14 @@ class FakeTuningConfig:
 def create_objectives(
     accuracy_criterion_cfg: AccuracyCriterion, tuning_criterion_cfg: TuningCriterion
 ) -> MultiObjective:
-    """
+    """Create objectives.
+    
+    #TODO(Yi)
     1. add the implementation
         1) add one metric
         2) multiple metrics
     2. should we move it as the function of sampler?
     """
-    from neural_compressor.common.objective import MultiObjective
-
     # set objectives
     def _use_multi_obj_check(obj):
         if isinstance(obj, list):

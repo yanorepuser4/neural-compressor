@@ -12,11 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import List, Set
-
-import numpy as np
-
-from neural_compressor.common.config import AccuracyCriterion, TuningConfig, TuningCriterion
+from typing import Set
+from neural_compressor.common.config import AccuracyCriterion, TuningCriterion
 from neural_compressor.common.objective import MultiObjective
 from neural_compressor.common.strategy.sampler import BaseSampler
 from neural_compressor.common.strategy.utility import create_objectives

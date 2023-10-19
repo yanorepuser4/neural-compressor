@@ -13,7 +13,6 @@
 # limitations under the License.
 
 from enum import Enum
-from itertools import product
 from typing import Any, Dict, List
 
 from neural_compressor.utils import logger

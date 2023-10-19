@@ -1,6 +1,4 @@
 import unittest
-
-
 class TestOrtWithTuner(unittest.TestCase):
     def test_interface(self):
         """A simple demo to test the interface between ORT and tuner."""
