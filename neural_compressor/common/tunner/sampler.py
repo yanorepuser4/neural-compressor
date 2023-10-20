@@ -16,7 +16,7 @@ from abc import abstractmethod
 from enum import Enum
 from typing import List
 
-from neural_compressor.common.strategy.search_space import HyperParams
+from neural_compressor.common.tunner.search_space import HyperParams
 from neural_compressor.common.constant import MAX_TRIALS_EACH_SAMPLER
 
 class SamplingAlgo(Enum):

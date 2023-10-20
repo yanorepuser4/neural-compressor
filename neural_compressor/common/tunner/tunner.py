@@ -15,8 +15,8 @@
 from typing import Set
 from neural_compressor.common.config import AccuracyCriterion, TuningCriterion
 from neural_compressor.common.objective import MultiObjective
-from neural_compressor.common.strategy.sampler import BaseSampler
-from neural_compressor.common.strategy.utility import create_objectives
+from neural_compressor.common.tunner.sampler import BaseSampler
+from neural_compressor.common.tunner.utility import create_objectives
 from neural_compressor.common import logger
 
 

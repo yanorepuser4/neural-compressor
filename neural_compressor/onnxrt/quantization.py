@@ -22,8 +22,8 @@ from neural_compressor.common.config import (
     optimization_level_sampler_config,
     smooth_quant_sampler_config,
 )
-from neural_compressor.common.strategy.sampler import BaseSampler
-from neural_compressor.common.strategy.search_space import HyperParams
+from neural_compressor.common.tunner.sampler import BaseSampler
+from neural_compressor.common.tunner.search_space import HyperParams
 from neural_compressor.onnxrt.utility import FAKE_EVAL_RESULT, FakeModel
 from neural_compressor.common import logger
 
@@ -107,7 +107,7 @@ class ORTQuantizer:
         return best_model
 
     def init_strategy(self):
-        from neural_compressor.common.strategy import Strategy
+        from neural_compressor.common.tunner import Strategy
 
         strategy = Strategy(
             baseline_model=self.fp32_model,

@@ -12,4 +12,4 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from neural_compressor.common.strategy.strategy import Strategy
+from neural_compressor.common.tunner.tunner import Strategy
