@@ -95,17 +95,18 @@ class FP8MatMul(torch.nn.Module):
     def __init__(self) -> None:
         super().__init__()
         self.out_dtype = torch.float32
+        self.register_buffer("input1_scale", torch.tensor(1.0).to('hpu'))
+        self.register_buffer("input2_scale", torch.tensor(1.0).to('hpu'))
 
-    def forward(self, input1, input2, transpose1=False, transpose2=False, 
-                input1_scale=torch.tensor(1).to('hpu'), input2_scale=torch.tensor(1).to('hpu')):
+    def forward(self, input1, input2, transpose1=False, transpose2=False):
         dim1 = input1.shape[-1] if not transpose1 else input1.shape[-2]
         dim2 = input2.shape[-2] if not transpose2 else input2.shape[-1]
         assert dim1 == dim2, "GEMM not possible"
 
-        input1_scale_inv = 1.0 / input1_scale
-        input2_scale_inv = 1.0 / input2_scale
-        input1 = torch.ops.hpu.cast_to_fp8_v2(input1, input1_scale, False, False)[0]
-        input2 = torch.ops.hpu.cast_to_fp8_v2(input2, input2_scale, False, False)[0]
+        input1_scale_inv = 1.0 / self.input1_scale
+        input2_scale_inv = 1.0 / self.input2_scale
+        input1 = torch.ops.hpu.cast_to_fp8_v2(input1, self.input1_scale, False, False)[0]
+        input2 = torch.ops.hpu.cast_to_fp8_v2(input2, self.input2_scale, False, False)[0]
         out = torch.ops.hpu.fp8_gemm_v2(
             input1,
             transpose1,

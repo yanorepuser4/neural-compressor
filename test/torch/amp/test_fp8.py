@@ -4,7 +4,8 @@ import shutil
 import unittest
 import torch
 
-from neural_compressor.torch.amp.modules.fp8_modules import INCFP8Linear
+from neural_compressor.torch.amp.modules.fp8_modules import FP8Linear
+from neural_compressor.torch.amp.modules.fp8_modules import FP8MatMul
 from neural_compressor.torch.amp import autocast
 from neural_compressor.torch.dtype import float8_e4m3, float8_e5m2
 from neural_compressor.common import logger
@@ -26,6 +27,16 @@ class M(torch.nn.Module):
         x1 = self.fc1(inp)
         x2 = self.fc2(x1)
         x3 = torch.matmul(inp.T, x2)
+        return x3
+
+class FP8MM(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.mm = FP8MatMul()
+
+    def forward(self, inp):
+        # instead of torch.matmul(inp.T, inp)
+        x3 = self.mm(inp.T, inp)
         return x3
 
 
@@ -62,6 +73,16 @@ class TestPytorchWeightOnlyAdaptor(unittest.TestCase):
         m = reset_FP8_linear(m)
         inp = self.inp
         e5m2_out = m(inp)
+
+    def test_FP8MatMul_module(self):
+        from neural_compressor.torch.amp.modules.fp8_modules import reset_FP8_linear
+        m = FP8MM()
+        no_calib_scale_out = m(inp)
+        # simulate calibration scales
+        m.mm.input1_scale = torch.tensor(0.5).to('hpu')
+        m.mm.input2_scale = torch.tensor(0.5).to('hpu')
+        inp = self.inp
+        w_calib_scale_out = m(inp)
 
 
 if __name__ == "__main__":
