@@ -22,8 +22,8 @@ from neural_compressor.common.config import (
     optimization_level_sampler_config,
     smooth_quant_sampler_config,
 )
-from neural_compressor.common.tunner.sampler import BaseSampler
-from neural_compressor.common.tunner.search_space import HyperParams
+from neural_compressor.common.tune.sampler import BaseSampler
+from neural_compressor.common.tune.search_space import HyperParams
 from neural_compressor.onnxrt.utility import FAKE_EVAL_RESULT, FakeModel
 from neural_compressor.common import logger
 
@@ -83,7 +83,7 @@ class ORTQuantizer:
         return FAKE_EVAL_RESULT
 
     def report_result(self, model):
-        """Evaluate the current model and report the result to strategy.
+        """Evaluate the current model and report the result to tuner.
 
         Args:
             model: the quantized model or fp32 model.
@@ -94,34 +94,34 @@ class ORTQuantizer:
         """Try to find the best quantization config and return the corresponding model.
 
         Steps:
-            1. Initialize a strategy.
+            1. Initialize a tuner.
             2. Register a set of custom samplers(search space).
             3. Traverse the search space and return the best model.
 
         Returns:
             Return best model if found, otherwise return None.
         """
-        strategy = self.init_strategy()
-        self.register_custom_samplers(strategy)
-        best_model = strategy.traverse(self)
+        tuner = self.init_tuner()
+        self.register_custom_samplers(tuner)
+        best_model = tuner.traverse(self)
         return best_model
 
-    def init_strategy(self):
-        from neural_compressor.common.tunner import Strategy
+    def init_tuner(self):
+        from neural_compressor.common.tune import Tuner
 
-        strategy = Strategy(
+        tuner = Tuner(
             baseline_model=self.fp32_model,
             accuracy_criterion=self.accuracy_criterion,
             tuning_criterion=self.tuning_criterion,
             eval_func=self._eval_func,
         )
-        return strategy
+        return tuner
 
-    def register_custom_samplers(self, strategy) -> None:
+    def register_custom_samplers(self, tuner) -> None:
         """Register a set of custom passes.
 
         Args:
-            strategy (Strategy): The strategy to register custom passes.
+            tuner (Tuner): The tuner to register custom passes.
         """
         ############################################
         # add graph optimization level sampler
@@ -140,7 +140,7 @@ class ORTQuantizer:
         opt_level_sampler = BaseSampler(
             hp=opt_level_hp, name="ort_graph_opt_level", priority=optimization_level_sampler_config.priority
         )
-        strategy.add_sampler(opt_level_sampler)
+        tuner.add_sampler(opt_level_sampler)
 
         ############################################
         # add sq sampler
@@ -149,7 +149,7 @@ class ORTQuantizer:
         sq_alpha = smooth_quant_sampler_config.alpha
         sq_hp = HyperParams(name="sq_alpha", params_space={"alpha": sq_alpha})
         sq_sampler = BaseSampler(hp=sq_hp, name="sq_alpha", priority=smooth_quant_sampler_config.priority)
-        strategy.add_sampler(sq_sampler)
+        tuner.add_sampler(sq_sampler)
 
 
 def quantize(

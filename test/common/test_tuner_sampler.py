@@ -1,7 +1,7 @@
 import unittest
 import numpy as np
-from neural_compressor.common.tunner.sampler import BaseSampler, FallbackSampler, AccumulatedFallbackSampler
-from neural_compressor.common.tunner.search_space import HyperParams
+from neural_compressor.common.tune.sampler import BaseSampler, FallbackSampler, AccumulatedFallbackSampler
+from neural_compressor.common.tune.search_space import HyperParams
 
 class TestSampler(unittest.TestCase):
     
