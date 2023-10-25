@@ -6,6 +6,7 @@ import torch
 from torch.nn.functional import pad
 from torch.utils.data import DataLoader
 from transformers import AutoModelForCausalLM, AutoTokenizer
+import habana_frameworks.torch.hpex
 
 
 parser = argparse.ArgumentParser()
@@ -21,6 +22,7 @@ parser.add_argument(
 parser.add_argument("--dataset", nargs="?", default="NeelNanda/pile-10k", const="NeelNanda/pile-10k")
 parser.add_argument("--output_dir", nargs="?", default="./saved_results")
 parser.add_argument("--quantize", action="store_true")
+parser.add_argument("--to_graph", action="store_true")
 parser.add_argument("--approach", type=str, default='static', 
                     help="Select from ['dynamic', 'static', 'weight-only']")
 parser.add_argument("--accuracy", action="store_true")
@@ -119,7 +121,6 @@ if re.search("llama", args.model.lower()):
     from transformers import LlamaForCausalLM, LlamaTokenizer
     user_model = LlamaForCausalLM.from_pretrained(
         args.model,
-        torchscript=True if args.sq or args.awq else False,  # torchscript will force `return_dict=False` to avoid jit errors
         revision=args.revision,
         device_map='hpu',
     )
@@ -128,7 +129,6 @@ elif re.search("mpt-7b-chat", args.model.lower()):
     from mpt_7b.modeling_mpt import MPTForCausalLM
     user_model = MPTForCausalLM.from_pretrained(
         args.model,
-        torchscript=True if args.sq or args.awq else False,  # torchscript will force `return_dict=False` to avoid jit errors
         trust_remote_code=args.trust_remote_code,
         revision=args.revision,
         device_map='hpu',
@@ -139,7 +139,6 @@ elif re.search("falcon-7b-instruct", args.model.lower()):
     from falcon_7b_instruct.modelling_RW import RWForCausalLM
     user_model = RWForCausalLM.from_pretrained(
         args.model,
-        torchscript=True if args.sq or args.awq else False,  # torchscript will force `return_dict=False` to avoid jit errors
         trust_remote_code=args.trust_remote_code,
         revision=args.revision,
         device_map='hpu',
@@ -149,7 +148,6 @@ elif re.search("falcon-7b-instruct", args.model.lower()):
 else:
     user_model = AutoModelForCausalLM.from_pretrained(
         args.model,
-        torchscript=True if args.sq or args.awq else False,  # torchscript will force `return_dict=False` to avoid jit errors
         trust_remote_code=args.trust_remote_code,
         revision=args.revision,
         device_map='hpu',
@@ -162,8 +160,13 @@ user_model.eval()
 
 if args.quantize:
     # dataset
+    print("device:", next(user_model.parameters()).device)
     from neural_compressor.torch.amp.modules.fp8_modules import reset_FP8_linear
     user_model = reset_FP8_linear(user_model)
+    print(user_model)
+    if args.to_graph:
+        import habana_frameworks.torch.hpu.graphs as htgraphs
+        user_model = htgraphs.wrap_in_hpu_graph(user_model)
 
 if args.accuracy:
     from intel_extension_for_transformers.llm.evaluation.lm_eval import evaluate
@@ -176,9 +179,6 @@ if args.accuracy:
         device='hpu',
     )
     dumped = json.dumps(results, indent=2)
-    if args.save_accuracy_path:
-        with open(args.save_accuracy_path, "w") as f:
-            f.write(dumped)
     for task_name in args.tasks:
         if task_name == "wikitext":
             print("Accuracy for %s is: %s" % (task_name, results["results"][task_name]["word_perplexity"]))
