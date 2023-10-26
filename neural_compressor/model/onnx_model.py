@@ -894,3 +894,22 @@ class ONNXModel(BaseModel):
             if "_smooth_scale" in init.name:
                 return True
         return False
+    
+    def find_weight_in_matmul(self, node):
+        """Find weight tensor in a MatMul node.
+
+        Args:
+            node (_type_): MatMul node
+        """
+        weight_idx = None
+        weight_tensor = None
+        input_0 = self.get_initializer(node.input[0])
+        input_1 = self.get_initializer(node.input[1])
+        if input_0 is not None:
+            weight_idx = 0
+            weight_tensor = input_0
+        elif input_1 is not None:
+            weight_idx = 1
+            weight_tensor = input_1
+        return weight_idx, weight_tensor
+

@@ -803,9 +803,46 @@ class ONNXRUNTIMEAdaptor(Adaptor):
         if self.backend == "TensorrtExecutionProvider":
             model = self._revert_conv_add_fusion(model)
         model = split_shared_bias(model)
+        model = self._unify_matmul_weight_idx(model)
         model.topological_sort()
         self.pre_optimized_model = model
 
+    def _unify_matmul_weight_idx(self, model):
+        """Unify the weight tensor of MatMul to input index 1."""
+        new_nodes = []
+        for node in model.model.graph.node:
+            if node.op_type == "MatMul":
+                weight_idx, weight_tensor = model.find_weight_in_matmul(node)
+                if weight_idx == 0:
+                    # 'MatMul(0:weight)' -> 'Transpose input -> MatMul(1:Transpose(weight)) -> Transpose output'
+                    input_trans_node = onnx.helper.make_node(
+                        "Transpose", [node.input[1]], [node.input[1] + '_trans'], node.name + "_input_Transpose")
+                    new_nodes.append(input_trans_node)
+
+                    output_trans_node = onnx.helper.make_node(
+                        "Transpose", [node.output[0] + '_trans'], outputs=[node.output[0]], name=node.name + "_output_Transpose"
+                    )
+                    new_nodes.append(output_trans_node)
+
+                    model.remove_initializer(weight_tensor)
+                    trans_weight= np.transpose(onnx.numpy_helper.to_array(weight_tensor))
+                    weight_trans = onnx.helper.make_tensor(
+                        node.input[0], 
+                        weight_tensor.data_type, 
+                        list(trans_weight.shape), 
+                        trans_weight)
+                    model.add_initializer(weight_trans)
+                    weight_name = node.input[0]
+                    node.input[0] = node.input[1] + '_trans'
+                    node.input[1] = weight_name
+                    node.output[0] += '_trans'
+                elif weight_idx == 1:
+                    continue
+        model.model.graph.node.extend(new_nodes)
+        model.save('optimze_mode.onnx')
+        ort.InferenceSession('optimze_mode.onnx', providers=['CPUExecutionProvider'])
+        return model
+    
     def _revert_conv_add_fusion(self, model):
         from onnx import numpy_helper
 
@@ -1838,7 +1875,7 @@ class ONNXRT_WeightOnlyAdaptor(ONNXRUNTIMEAdaptor):
                         optype_wise[op].append(op_capability)
 
         for node in self.pre_optimized_model.nodes():
-            if node.op_type in ["MatMul", "Attention"] and model.get_initializer(node.input[1]) is None:
+            if node.op_type in ["MatMul"] and model.find_weight_in_matmul(node) is None:
                 op_wise.update(
                     {(node.name, node.op_type): [{"weight": {"dtype": "fp32"}, "activation": {"dtype": "fp32"}}]}
                 )
