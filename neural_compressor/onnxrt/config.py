@@ -16,8 +16,7 @@ from __future__ import annotations
 
 from neural_compressor.common.config import (
     _StaticQuantConfig,
-    _SmoothQuantConfig,
-    registered_config
+    _SmoothQuantConfig
     )
 
 from typing import Union, Any, List
@@ -28,7 +27,6 @@ class DataType(Enum):
     FP16 = auto()
     BF16 = auto()
     INT8 = auto()
-    
 
 class OrtQuantMode(Enum):
     QDQ = auto()
@@ -77,3 +75,13 @@ static_config_common = StaticQuantConfig(
     white_list=['Conv2d', 'Linear'])
 
 
+class SmoothQuantConfig(_SmoothQuantConfig):
+    tunable_params = ['alpha', 'folding']
+    def __init__(
+        self,
+        alpha: Union[float, List[float]] = None,
+        folding: Union[bool, List[bool]] = None,
+        ) -> None:
+        super().__init__(alpha=alpha, folding=folding)
+
+sq_config = SmoothQuantConfig(alpha=[0.5], folding=[True, False])
