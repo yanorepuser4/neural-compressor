@@ -76,10 +76,34 @@ class AlgorithmConfig:
     @classmethod
     def expand(
         cls,
-        user_config: AlgorithmConfig,
-        fwk_config: AlgorithmConfig,
+        merged: AlgorithmConfig,
         model_info: Dict = None
-        ):
+        ) -> AlgorithmConfig:
+        """
+        trial1:
+            model_quant_config = {
+                "op_type":{
+                    'conv': AlgorithmConfig(act_dtype=int8, weight_dtype=uint8, ...),
+                    'linear': AlgorithmConfig(act_dtype=int8, weight_dtype=uint8, ...)
+                },
+                "op_instance":{
+                    'conv1': AlgorithmConfig(act_dtype=int8, weight_dtype=uint8, ...),
+                    'linear3': AlgorithmConfig(act_dtype=int8, weight_dtype=uint8, ...)
+                }
+            }
+        trial2:
+            model_quant_config = {
+                "op_type":{
+                    'conv': AlgorithmConfig(act_dtype=int8, weight_dtype=int8, ...),
+                    'linear': AlgorithmConfig(act_dtype=int8, weight_dtype=uint8, ...)
+                },
+                "op_instance":{
+                    'conv1': AlgorithmConfig(act_dtype=int8, weight_dtype=int8, ...),
+                    'linear3': AlgorithmConfig(act_dtype=int8, weight_dtype=uint8, ...)
+                }
+            }
+            ...
+        """
         pass
 
     @classmethod
