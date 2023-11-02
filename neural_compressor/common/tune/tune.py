@@ -13,7 +13,6 @@
 # limitations under the License.
 
 from typing import Set
-from neural_compressor.common.config import AccuracyCriterion, TuningCriterion
 from neural_compressor.common.objective import MultiObjective
 from neural_compressor.common.tune.sampler import BaseSampler
 from neural_compressor.common.tune.utility import create_objectives
@@ -21,22 +20,6 @@ from neural_compressor.common import logger
 
 
 class Tuner:
-    @property
-    def accuracy_criterion(self) -> AccuracyCriterion:
-        return self._accuracy_criterion
-
-    @accuracy_criterion.setter
-    def accuracy_criterion(self, value):
-        self._accuracy_criterion = value
-
-    @property
-    def tuning_criterion(self) -> TuningCriterion:
-        return self._tuning_criterion
-
-    @tuning_criterion.setter
-    def tuning_criterion(self, value):
-        self._tuning_criterion = value
-
     @property
     def tuning_objectives(self) -> MultiObjective:
         return self._tuning_objectives
@@ -61,12 +44,10 @@ class Tuner:
     def baseline_model(self, model):
         self._baseline_model = model
 
-    def __init__(self, baseline_model, accuracy_criterion, tuning_criterion, eval_func) -> None:
+    def __init__(self, baseline_model, tuning_config, eval_func) -> None:
         self.sampler_set: Set[BaseSampler] = set()
         self._baseline_model = baseline_model
-        self._accuracy_criterion = accuracy_criterion
-        self._tuning_criterion = tuning_criterion
-        self._tuning_objectives = None
+        self.tuning_config = tuning_config
         self._adaptor_eval_func = eval_func
         self._post_init()
 

@@ -21,7 +21,18 @@ from neural_compressor.common.config import (
 
 from typing import Union, Any, List
 from enum import Enum, auto
+import onnxruntime as ort
 
+
+class OptimizationLevel(Enum):
+    """Optimization level for ORT graph."""
+
+    DISABLED = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
+    BASIC = ort.GraphOptimizationLevel.ORT_ENABLE_BASIC
+    EXTENDED = ort.GraphOptimizationLevel.ORT_ENABLE_EXTENDED
+    ALL = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+    
+    
 class DataType(Enum):
     FLOAT32 = auto()
     FP16 = auto()
