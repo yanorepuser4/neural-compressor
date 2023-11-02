@@ -1,152 +1,154 @@
-# Copyright (c) 2023 Intel Corporation
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#    http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+from __future__ import annotations
+
+"""
+Algo/Kernel Capability:
+1. Conv2d, Linear may have different capability.
+2. cpu and gpu may have different capability.
+3. ipex and stock pytorch may have different capability.
+
+Expand: 
+Per-Op-wise  (static quant)
+Per-OpType-wise 
+Per-Model-wise (sq)
+
+Merge:
+override Op-Type cap
+override op cap
+
+common:
+- for end-user
+- for tuning config
+- for adaptor config
+
+goal:
+- new data type
+- new algo
+- customize the tuning order
+
+merge:
+    for sq_alpha, 
+    for dtype,
+    
+expand:
+    - no model info
+    - have model info
+"""
 
 
-class BaseConfig():
-  def __init__(self):
-      self.scope = {}
-
-  def __add__(self, obj):
-      self.scope = {**self.scope, **obj.scope}
-
-class FP32Config(BaseConfig):
-  def __init__(self, scope):
-      super().__init__()
-      self.scope = {'fp32': scope}
-
-class FP8QuantConfig(BaseConfig):
-  def __init__(self, scheme, scope):
-      super().__init__()
-      assert(scheme in ['fp8_e4m3', 'fp8_e3m4', 'fp8_e5m2']), "The FP8 configuration is wrong! Please double check."
-      self.scope = {scheme: scope}
+from typing import Dict, Union, Any, List
 
 
-from neural_compressor.common.constant import MAX_TRIALS_EACH_SAMPLER
+
+# 
+# {
+#     backend_name:
+#         static:
+            
+# }
 
 
-# Place configs that can be applied to all adaptors here.
-# These configs are designed for advanced user to customized tuning process with more flexibility.
-class BasicSamplerConfig:
-    priority = 100
-    max_trials = MAX_TRIALS_EACH_SAMPLER
+registered_configs = {}  # A dictionary to store registered configurations
+
+def register_config(algo_name, priority):
+    def decorator(cls):
+        # Store the class in the registered_configs dictionary
+        registered_configs[algo_name] = {
+            'class': cls,
+            'priority': priority
+        }
+        return cls  # Return the class unmodified
+    return decorator
 
 
-class SmoothQuantSamplerConfig(BasicSamplerConfig):
-    alpha = [0.5]
+class AlgorithmConfig:
+
+    def __init__(
+        self,
+        white_list: List[Any] = None,
+        black_list: List[Any] = None,
+        ) -> None:
+        self.white_list = white_list
+        self.black_list = black_list
+        self.constrain_funcs = []
+
+    def add_constraint_fun(self, new_filter_func):
+        self.constrain_funcs.append(new_filter_func)
+
+    @classmethod
+    def expand(
+        cls,
+        user_config: AlgorithmConfig,
+        fwk_config: AlgorithmConfig,
+        model_info: Dict = None
+        ):
+        pass
+
+    @classmethod
+    def merge(
+        cls,
+        user_config: AlgorithmConfig,
+        fwk_config: AlgorithmConfig,
+        model_info: Dict = None
+        ):
+        """
+        For op_type
+            {
+                'conv': AlgorithmConfig(),
+                'linear': AlgorithmConfig(),
+            }
+        For op_instance:
+            {
+                'conv':
+                    'conv1': AlgorithmConfig()
+                    'conv2': AlgorithmConfig(),
+                'linear':
+                    'linear1': AlgorithmConfig()
+                    'conv2': AlgorithmConfig(),
+            }
+        """
+        pass
+    
+    @classmethod
+    def get_default_config(
+        cls,
+        model_info: Dict = None
+        ) -> Dict[str: AlgorithmConfig]:
+        """
+        if model_info is not None:
+            conv1: 
+            conv2:
+        else:
+            conv:
+            linear:
+        """
+
+@register_config(algo_name="static", priority=1)
+class _StaticQuantConfig(AlgorithmConfig):
+    tunable_params = ['act_dtype', 'act_sym', 'weight_dtype', 'weight_sym']
+    def __init__(
+        self,
+        act_dtype: Union[Any, List[Any]] = None,
+        act_sym: Union[bool, List[bool]] = None,
+        weight_dtype: Union[Any, List[Any]] = None,
+        weight_sym: Union[bool, List[bool]] = None,
+        white_list: List[Any] = None,
+        black_list: List[Any] = None,
+        ) -> None:
+        super().__init__(white_list=white_list, black_list=black_list)
+        self.act_dtype = act_dtype
+        self.act_sym = act_sym
+        self.weight_dtype = weight_dtype
+        self.weight_sym = weight_sym
 
 
-class OpTypeWiseSamplerConfig(BasicSamplerConfig):
-    priority = 10
-    op_types = []
-
-
-class OptimizationLevelSamplerConfig(BasicSamplerConfig):
-    priority = 100
-    optimization_levels = []
-
-
-basic_sampler_config = BasicSamplerConfig()
-smooth_quant_sampler_config = SmoothQuantSamplerConfig()
-op_type_wise_sampler_config = OpTypeWiseSamplerConfig()
-optimization_level_sampler_config = OptimizationLevelSamplerConfig()
-
-
-class TuningConfig:
-    """Tuning Config class.
-
-    #TODO(Yi) should we use TuningConfig to replace TuningCriterion and AccuracyCriterion?
-    TuningConfig class is used to configure the trials order, accuracy constraint and exit policy.
-    Note: The TuningConfig class merges the main functionalities of TuningCriterion and AccuracyCriterion of INC 2.x.
-
-    Attributes for trials order:
-        - quant_level
-        - sampler[New introduced to replace `strategy`]
-    Attributes for accuracy criterion:
-        - higher_is_better
-        - relative
-        - tolerable_loss
-    Attributes for exit policy:
-        - objective
-        - timeout
-        - max_trials
-    """
-
-    pass
-
-
-class TuningCriterion:
-    """Class for Tuning Criterion.
-
-    Args:
-        strategy: Strategy name used in tuning. Please refer to docs/source/tuning_strategies.md.
-        strategy_kwargs: Parameters for strategy. Please refer to docs/source/tuning_strategies.md.
-        objective: String or dict. Objective with accuracy constraint guaranteed. String value supports
-                  'performance', 'modelsize', 'footprint'. Default value is 'performance'.
-                   Please refer to docs/source/objective.md.
-        timeout: Tuning timeout (seconds). Default value is 0 which means early stop.
-        max_trials: Max tune times. Default value is 100. Combine with timeout field to decide when to exit.
-
-    Example::
-        from neural_compressor.config import TuningCriterion
-
-        tuning_criterion=TuningCriterion(
-            timeout=0,
-            max_trials=100,
-            strategy="basic",
-            strategy_kwargs=None,
-        )
-    """
-
-    def __init__(self, strategy="basic", strategy_kwargs=None, timeout=0, max_trials=100, objective="performance"):
-        """Init a TuningCriterion object."""
-        self.strategy = strategy
-        self.timeout = timeout
-        self.max_trials = max_trials
-        self.objective = objective
-        self.strategy_kwargs = strategy_kwargs
-
-
-tuning_criterion = TuningCriterion()
-
-
-class AccuracyCriterion:
-    """Class of Accuracy Criterion.
-
-    Args:
-        higher_is_better(bool, optional): This flag indicates whether the metric higher is the better.
-                                          Default value is True.
-        criterion:(str, optional): This flag indicates whether the metric loss is 'relative' or 'absolute'.
-                                   Default value is 'relative'.
-        tolerable_loss(float, optional): This float indicates how much metric loss we can accept.
-                                         Default value is 0.01.
-
-    Example::
-
-        from neural_compressor.config import AccuracyCriterion
-
-        accuracy_criterion = AccuracyCriterion(
-            higher_is_better=True,  # optional.
-            criterion='relative',  # optional. Available values are 'relative' and 'absolute'.
-            tolerable_loss=0.01,  # optional.
-        )
-    """
-
-    def __init__(self, higher_is_better=True, criterion="relative", tolerable_loss=0.01):
-        """Init an AccuracyCriterion object."""
-        self.higher_is_better = higher_is_better
-        self.criterion = criterion
-        self.tolerable_loss = tolerable_loss
-
-
-accuracy_criterion = AccuracyCriterion()
+@register_config(algo_name="smooth_quant", priority=1)
+class _SmoothQuantConfig(AlgorithmConfig):
+    tunable_params = ['alpha', 'folding']
+    def __init__(
+        self,
+        alpha: Union[float, List[float]] = None,
+        folding: Union[bool, List[bool]] = None,
+        ) -> None:
+        super().__init__()
+        self.alpha = alpha
+        self.folding = folding
