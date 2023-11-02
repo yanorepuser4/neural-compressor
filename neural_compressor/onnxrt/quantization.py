@@ -16,12 +16,7 @@ from enum import Enum
 
 import onnxruntime as ort
 
-from neural_compressor.common.config import (
-    basic_sampler_config,
-    op_type_wise_sampler_config,
-    optimization_level_sampler_config,
-    smooth_quant_sampler_config,
-)
+
 from neural_compressor.common.tune.sampler import BaseSampler
 from neural_compressor.common.tune.search_space import HyperParams
 from neural_compressor.onnxrt.utility import FAKE_EVAL_RESULT, FakeModel

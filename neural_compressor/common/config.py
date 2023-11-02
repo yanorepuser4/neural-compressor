@@ -43,7 +43,6 @@ from typing import Dict, Union, Any, List
 # {
 #     backend_name:
 #         static:
-            
 # }
 
 
@@ -129,16 +128,24 @@ class _StaticQuantConfig(AlgorithmConfig):
         self,
         act_dtype: Union[Any, List[Any]] = None,
         act_sym: Union[bool, List[bool]] = None,
+        act_granularity: Union[Any, List[Any]] = None,
+        act_algorithm: Union[bool, List[bool]] = None,
         weight_dtype: Union[Any, List[Any]] = None,
         weight_sym: Union[bool, List[bool]] = None,
+        weight_granularity: Union[Any, List[Any]] = None,
+        weight_algorithm: Union[bool, List[bool]] = None,
         white_list: List[Any] = None,
         black_list: List[Any] = None,
         ) -> None:
         super().__init__(white_list=white_list, black_list=black_list)
         self.act_dtype = act_dtype
         self.act_sym = act_sym
+        self.act_granularity = act_granularity
+        self.act_algorithm = act_algorithm
         self.weight_dtype = weight_dtype
         self.weight_sym = weight_sym
+        self.weight_granularity = weight_granularity
+        self.weight_algorithm = weight_algorithm
 
 
 @register_config(algo_name="smooth_quant", priority=1)
