@@ -1,0 +1,9 @@
+datasets
+matplotlib
+neural_compressor==1.12
+onnxruntime
+onnxruntime_extensions
+pandas
+scipy
+torch==1.10.0
+transformers[tf,torch,sentencepiece,vision,sklearn,onnxruntime]==4.11.3
