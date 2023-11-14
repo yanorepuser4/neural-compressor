@@ -24,11 +24,11 @@ def fp8_linear_forward(input, weight, bias):
     if use_amax:
         input_scale = dtype_amax / input.abs().max()
         weight_scale = dtype_amax / weight.abs().max()
+        input_scale_inv = 1.0 / input_scale
+        weight_scale_inv = 1.0 / weight_scale
     else:
-        input_scale = torch.tensor(1).to('hpu')
-        weight_scale = torch.tensor(1).to('hpu')
-    input_scale_inv = 1.0 / input_scale
-    weight_scale_inv = 1.0 / weight_scale
+        input_scale, weight_scale = None, None
+        input_scale_inv, weight_scale_inv = None, None
     input = torch.ops.hpu.cast_to_fp8_v2(input, input_scale_inv, False, False)[0]
     weight = torch.ops.hpu.cast_to_fp8_v2(weight, weight_scale_inv, False, False)[0]
     out = torch.ops.hpu.fp8_gemm_v2(
@@ -53,11 +53,11 @@ def fp8_matmul(input1, input2):
     if use_amax:
         input1_scale = dtype_amax / input1.data.abs().max()
         input2_scale = dtype_amax / input2.data.abs().max()
+        input1_scale_inv = 1.0 / input1_scale
+        input2_scale_inv = 1.0 / input2_scale
     else:
-        input1_scale = torch.tensor(1).to('hpu')
-        input2_scale = torch.tensor(1).to('hpu')
-    input1_scale_inv = 1.0 / input1_scale
-    input2_scale_inv = 1.0 / input2_scale
+        input1_scale, input2_scale = None, None
+        input1_scale_inv, input2_scale_inv = None, None
     input1 = torch.ops.hpu.cast_to_fp8_v2(input1, input1_scale, False, False)[0]
     input2 = torch.ops.hpu.cast_to_fp8_v2(input2, input2_scale, False, False)[0]
     out = torch.ops.hpu.fp8_gemm_v2(
@@ -83,11 +83,11 @@ def fp8_bmm(input1, input2):
     if use_amax:
         input1_scale = dtype_amax / input1.data.abs().max()
         input2_scale = dtype_amax / input2.data.abs().max()
+        input1_scale_inv = 1.0 / input1_scale
+        input2_scale_inv = 1.0 / input2_scale
     else:
-        input1_scale = torch.tensor(1).to('hpu')
-        input2_scale = torch.tensor(1).to('hpu')
-    input1_scale_inv = 1.0 / input1_scale
-    input2_scale_inv = 1.0 / input2_scale
+        input1_scale, input2_scale = None, None
+        input1_scale_inv, input2_scale_inv = None, None
     input1 = torch.ops.hpu.cast_to_fp8_v2(input1, input1_scale, False, False)[0]
     input2 = torch.ops.hpu.cast_to_fp8_v2(input2, input2_scale, False, False)[0]
     out = _torch_bmm(input1, input2)
