@@ -24,13 +24,13 @@ parser.add_argument("--output_dir", nargs="?", default="./saved_results")
 parser.add_argument("--quantize", action="store_true")
 parser.add_argument("--to_graph", action="store_true")
 parser.add_argument("--approach", type=str, default='static', 
-                    help="Select from ['dynamic', 'static', 'weight-only']")
+                    help="Select from ['dynamic', 'static']")
 parser.add_argument("--accuracy", action="store_true")
 parser.add_argument("--batch_size", default=1, type=int,
                     help="For accuracy measurement only.")
 parser.add_argument("--pad_max_length", default=512, type=int,
                     help="Pad input ids to max length.")
-parser.add_argument("--calib_iters", default=512, type=int,
+parser.add_argument("--calib_iters", default=100, type=int,
                     help="calibration iters.")
 parser.add_argument("--tasks", nargs='+', default=["wikitext"], type=str, \
                     choices=["winogrande", "copa", "piqa", "rte", "hellaswag", \
@@ -38,83 +38,6 @@ parser.add_argument("--tasks", nargs='+', default=["wikitext"], type=str, \
                     help="tasks list for accuracy validation")
 args = parser.parse_args()
 
-
-class Evaluator:
-    def __init__(self, dataset, tokenizer, batch_size=8, pad_val=1, pad_max=196, is_calib=False):
-        self.dataset = dataset
-        self.tokenizer = tokenizer
-        self.batch_size = batch_size
-        self.pad_val = pad_val
-        self.pad_max = pad_max
-        self.is_calib = is_calib
-
-        # tokenize the dataset
-        self.dataset = self.dataset.map(self.tokenize_function, batched=True)
-        self.dataset.set_format(type="torch", columns=["input_ids"])
-
-    @torch.no_grad()
-    def tokenize_function(self, examples):
-        if args.awq: # require same seq length for concat in AWQ algo.
-            if self.tokenizer.pad_token is None:
-                self.tokenizer.pad_token = self.tokenizer.eos_token
-            example = self.tokenizer(examples["text"], padding="max_length", max_length=self.pad_max)
-        else:
-            example = self.tokenizer(examples["text"])
-        return example
-
-    @torch.no_grad()
-    def collate_batch(self, batch):
-
-        input_ids_padded = []
-        last_ind = []
-
-        for text in batch:
-            input_ids = text["input_ids"]
-            pad_len = self.pad_max - input_ids.shape[0]
-            last_ind.append(input_ids.shape[0] - 1)
-            if self.is_calib:
-                input_ids = input_ids[:self.pad_max] if len(input_ids) > self.pad_max else input_ids
-            else:
-                input_ids = pad(input_ids, (0, pad_len), value=self.pad_val)
-            input_ids_padded.append(input_ids)
-
-        return (torch.vstack(input_ids_padded), torch.tensor(last_ind))
-
-    @torch.no_grad()
-    def evaluate(self, model):
-
-        model.eval()
-        # The task is to predict the last word of the input.
-        total, hit = 0, 0
-        latency = 0
-        test_dataloader = DataLoader(
-            self.dataset,
-            batch_size=self.batch_size,
-            shuffle=False,
-            collate_fn=self.collate_batch,
-        )
-        for i, (input_ids, last_ind) in enumerate(test_dataloader):
-            label = input_ids[torch.arange(len(last_ind)), last_ind]
-            input_ids[torch.arange(len(last_ind)), last_ind] = self.pad_val
-            pad_len = self.pad_max - last_ind - 1
-
-            start = time.time()
-            outputs = model(input_ids)
-            latency += time.time() - start
-
-            last_token_logits = outputs[0][torch.arange(len(last_ind)), -2 - pad_len, :]
-            pred = last_token_logits.argmax(dim=-1)
-            total += label.size(0)
-            hit += (pred == label).sum().item()
-            if i % 50 == 0:
-                print(hit / total)
-                print("Processed minibatch:", i)
-
-        acc = hit / total
-        print("Accuracy: ", acc)
-        lantecy = latency / len(self.dataset)
-        print("Latency: ", latency)
-        return acc
 
 if re.search("llama", args.model.lower()):
     import transformers
@@ -159,11 +82,35 @@ user_model = user_model.to(memory_format=torch.channels_last)
 user_model.eval()
 
 if args.quantize:
-    # dataset
     print("device:", next(user_model.parameters()).device)
-    from neural_compressor.torch.amp.modules.fp8_modules import reset_FP8_linear
-    user_model = reset_FP8_linear(user_model)
-    print(user_model)
+    from neural_compressor.torch.quantization import get_static_qconfig
+    qconfig = get_static_qconfig()
+
+    from neural_compressor.torch.quantization.fp8 import quantize_dynamic, quantize
+    if args.approach == "dynamic":
+        user_model = quantize_dynamic(user_model)
+    else:
+        # dataset
+        from datasets import load_dataset
+        calib_dataset = load_dataset(args.dataset, split="train").select(range(100))
+        calib_dataset = calib_dataset.shuffle(seed=42)
+        calib_data = []
+        for examples in calib_dataset:
+            calib_data.append(
+                tokenizer(examples["text"], return_tensors="pt", padding=True, max_length=128)
+            )
+
+        def calib_func(model):
+            for i, calib_input in enumerate(calib_data):
+                if i >= args.calib_iters:
+                    break
+                model(
+                    input_ids=calib_input["input_ids"],
+                    attention_mask=calib_input["attention_mask"],
+                )
+
+        user_model = quantize(user_model, qconfig, calib_func=calib_func)
+
     if args.to_graph:
         import habana_frameworks.torch.hpu.graphs as htgraphs
         user_model = htgraphs.wrap_in_hpu_graph(user_model)

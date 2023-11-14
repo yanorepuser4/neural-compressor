@@ -13,6 +13,8 @@ from neural_compressor.common import logger
 
 
 tmp = torch.ops.hpu.cast_to_fp8_v2(torch.tensor(500).to('hpu'), torch.tensor(1).to('hpu'), False, False)[0]
+
+tmp = torch.ops.hpu.cast_from_fp8(tmp, torch.tensor(1).to('hpu'), torch.float32)
 logger.info(f"max value: {tmp}")
 
 

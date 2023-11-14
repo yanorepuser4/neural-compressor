@@ -7,5 +7,5 @@ python run_llm.py --model {model_name_or_path} --tasks lambada_openai --batch_si
 
 ## Run FP8 model
 ``` python
-python run_llm.py --model {model_name_or_path} --tasks lambada_openai --batch_size 32  --accuracy --quantize --to_graph
+python run_llm.py --model {model_name_or_path} --approach [dynamic|static] --tasks lambada_openai --batch_size 32  --accuracy --quantize --to_graph
 ```
