@@ -209,4 +209,7 @@ class FP8Matmul(torch.nn.Module):
             'E4M3' if os.getenv('PT_USE_FP8_143') is not None else 'E5M2',
         )
 
-FP8BatchMatmul = FP8Matmul
+
+class FP8BatchMatmul(FP8Matmul):
+    pass
+
