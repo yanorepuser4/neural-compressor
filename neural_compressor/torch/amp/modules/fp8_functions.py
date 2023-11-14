@@ -75,30 +75,10 @@ def fp8_matmul(input1, input2):
     return out
 
 
-def fp8_bmm(input1, input2):
-    raw_dtype = input1.dtype
-    dtype_amax = E4M3_AMAX if os.getenv('PT_USE_FP8_143') is not None else E5M2_AMAX
-    use_amax = False if os.getenv('PT_USE_FP8_AMAX') is None else True
-    logger.debug(f"torch.matmul dtype_amax: {dtype_amax}, use_amax: {use_amax}")
-    if use_amax:
-        input1_scale = dtype_amax / input1.data.abs().max()
-        input2_scale = dtype_amax / input2.data.abs().max()
-        input1_scale_inv = 1.0 / input1_scale
-        input2_scale_inv = 1.0 / input2_scale
-    else:
-        input1_scale, input2_scale = None, None
-        input1_scale_inv, input2_scale_inv = None, None
-    input1 = torch.ops.hpu.cast_to_fp8_v2(input1, input1_scale, False, False)[0]
-    input2 = torch.ops.hpu.cast_to_fp8_v2(input2, input2_scale, False, False)[0]
-    out = _torch_bmm(input1, input2)
-    out = torch.ops.hpu.cast_from_fp8(out, None, raw_dtype)
-    return out * input1_scale_inv * input2_scale_inv
-
-
 def replace_func():
     F.linear = fp8_linear_forward
     torch.matmul = fp8_matmul
-    torch.bmm = fp8_bmm
+    torch.bmm = fp8_matmul
     logger.debug("F.linear and torch.matmul are replaced with the fp8 one")
 
 

@@ -82,5 +82,6 @@ class autocast:
             from neural_compressor.torch.amp.modules.fp8_functions import recover_func
             # This function will recover F.linear and torch.matmul with the original one
             recover_func()
+            os.environ.pop("PT_USE_FP8_143", None)
         else:
             self._autocast.__exit__(exc_type, exc_value, traceback)

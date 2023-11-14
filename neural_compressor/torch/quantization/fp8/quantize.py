@@ -3,9 +3,15 @@ import copy
 import os
 from neural_compressor.torch.quantization.utils import set_module
 from ..modules import BatchMatmul, Matmul
+from .modules import FP8Linear, FP8BatchMatmul, FP8Matmul
 
 
-white_list = [torch.nn.Linear, BatchMatmul, Matmul]
+quantization_mapping = {
+    torch.nn.Linear: FP8Linear,
+    BatchMatmul: FP8BatchMatmul,
+    Matmul: FP8Matmul,
+}
+white_list = tuple(quantization_mapping.keys())
 
 
 def quantize_dynamic(model, inplace=True):
@@ -32,7 +38,7 @@ def _add_observer(model, algorithm='minmax'):
     ### Insert input observer into model, only for fp8_e4m3 static quantization ###
     from .observer import MinMaxObserver, FP8HistogramObserver
     for name, module in model.named_modules():
-        if isinstance(module, tuple(white_list)):
+        if isinstance(module, white_list):
             module.add_module(
                 'input_activation_post_process', FP8HistogramObserver() if \
                             algorithm == 'kl' else MinMaxObserver()
@@ -86,8 +92,9 @@ def _remove_observer(model):
 def _replace_module(model):
     from neural_compressor.torch.quantization.fp8.modules import FP8Linear
     for name, module in model.named_modules():
-        if isinstance(module, torch.nn.Linear):
-            module = FP8Linear(module)
+        if isinstance(module, white_list):
+            QModule = quantization_mapping[type(module)]
+            module = QModule(module)
             set_module(model, name, module)
 
 

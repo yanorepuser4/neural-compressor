@@ -76,7 +76,6 @@ class FP8DynamicLinear(torch.nn.Module):
         return out.view(-1, *inp.shape[1:-1], out.shape[-1])
 
     def extra_repr(self) -> str:
-        import os
         return 'in_features={}, out_features={}, bias={}, format={}'.format(
             self.in_features, self.out_features, self.bias is not None, self.dtype,
         )
@@ -152,33 +151,49 @@ class FP8Linear(torch.nn.Module):
         return out.view(-1, *inp.shape[1:-1], out.shape[-1])
 
     def extra_repr(self) -> str:
-        import os
         return 'in_features={}, out_features={}, bias={}, scale={}, format={}'.format(
             self.in_features, self.out_features, self.bias is not None, self.scale, self.dtype,
         )
 
-# pragma: no cover
+
 class FP8Matmul(torch.nn.Module):
-    def __init__(self) -> None:
+    def __init__(self, org_module) -> None:
         super().__init__()
+        org_module.to('hpu')
         self.out_dtype = torch.float32
-        self.register_buffer("input1_scale", torch.tensor(1.0).to('hpu'))
-        self.register_buffer("input2_scale", torch.tensor(1.0).to('hpu'))
+        assert hasattr(org_module, "scale") and hasattr(org_module, "scale1"), \
+                "scale is not recorded when convert to FP8Linear."
+        self.register_buffer(
+            'scale', 
+            torch.tensor(
+                org_module.scale,
+                device="hpu",
+                dtype=self.out_dtype,
+            ) 
+        )
+        self.register_buffer(
+            'scale1', 
+            torch.tensor(
+                org_module.scale1,
+                device="hpu",
+                dtype=self.out_dtype,
+            ) 
+        )
 
-    def forward(self, input1, input2, transpose1=False, transpose2=False):
-        dim1 = input1.shape[-1] if not transpose1 else input1.shape[-2]
-        dim2 = input2.shape[-2] if not transpose2 else input2.shape[-1]
+    def forward(self, input1, input2):
+        dim1 = input1.shape[-1]
+        dim2 = input2.shape[-2]
         assert dim1 == dim2, "GEMM not possible"
 
-        input1_scale_inv = 1.0 / self.input1_scale
-        input2_scale_inv = 1.0 / self.input2_scale
-        input1 = torch.ops.hpu.cast_to_fp8_v2(input1, self.input1_scale, False, False)[0]
-        input2 = torch.ops.hpu.cast_to_fp8_v2(input2, self.input2_scale, False, False)[0]
+        input1_scale_inv = 1.0 / self.scale
+        input2_scale_inv = 1.0 / self.scale1
+        input1 = torch.ops.hpu.cast_to_fp8_v2(input1, self.scale, False, False)[0]
+        input2 = torch.ops.hpu.cast_to_fp8_v2(input2, self.scale1, False, False)[0]
         out = torch.ops.hpu.fp8_gemm_v2(
             input1,
-            transpose1,
+            False,
             input2,
-            transpose2,
+            False,
             None,
             self.out_dtype,
             input1_scale_inv, # inv is used for recover scale
@@ -189,43 +204,9 @@ class FP8Matmul(torch.nn.Module):
         return out
 
     def extra_repr(self) -> str:
-        import os
-        return 'format={}'.format(
+        return 'scales={}, format={}'.format(
+            (self.scale, self.scale1),
             'E4M3' if os.getenv('PT_USE_FP8_143') is not None else 'E5M2',
         )
 
-class FP8BatchMatmul(torch.nn.Module):
-    def __init__(self) -> None:
-        super().__init__()
-        self.out_dtype = torch.float32
-        self.register_buffer("input1_scale", torch.tensor(1.0).to('hpu'))
-        self.register_buffer("input2_scale", torch.tensor(1.0).to('hpu'))
-
-    def forward(self, input1, input2, transpose1=False, transpose2=False):
-        dim1 = input1.shape[-1] if not transpose1 else input1.shape[-2]
-        dim2 = input2.shape[-2] if not transpose2 else input2.shape[-1]
-        assert dim1 == dim2, "GEMM not possible"
-
-        input1_scale_inv = 1.0 / self.input1_scale
-        input2_scale_inv = 1.0 / self.input2_scale
-        input1 = torch.ops.hpu.cast_to_fp8_v2(input1, self.input1_scale, False, False)[0]
-        input2 = torch.ops.hpu.cast_to_fp8_v2(input2, self.input2_scale, False, False)[0]
-        out = torch.ops.hpu.fp8_gemm_v2(
-            input1,
-            transpose1,
-            input2,
-            transpose2,
-            None,
-            self.out_dtype,
-            input1_scale_inv, # inv is used for recover scale
-            input2_scale_inv,
-            None,
-            False,
-        )
-        return out
-
-    def extra_repr(self) -> str:
-        import os
-        return 'format={}'.format(
-            'E4M3' if os.getenv('PT_USE_FP8_143') is not None else 'E5M2',
-        )
+FP8BatchMatmul = FP8Matmul
