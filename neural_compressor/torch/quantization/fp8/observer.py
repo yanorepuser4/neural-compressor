@@ -3,6 +3,11 @@ from typing import Tuple
 from torch.ao.quantization.observer import *
 
 
+# without scale factor 0.9, the output will be abnormal.
+E4M3_AMAX = torch.tensor(240*0.9, dtype=torch.float).to('hpu')
+E5M2_AMAX = torch.tensor(57344*0.9, dtype=torch.float).to('hpu')
+
+
 class FP8HistogramObserver(HistogramObserver):
     def __init__(
         self,
@@ -29,17 +34,16 @@ class FP8HistogramObserver(HistogramObserver):
             factory_kwargs=factory_kwargs,
             eps=eps,
         )
-        self.format = format
 
     def _get_dst_bin(self, src_bin_begin, src_bin_end, dst_bin_max):
         # get dst bin value
-        FP8_max = self.qtconfig.get_flt_max()
-        scale = FP8_max / dst_bin_max
+        FP8_amax = E4M3_AMAX if self.dtype == torch.float8_e4m3fn else E5M2_AMAX
+        scale = FP8_amax / dst_bin_max
         if torch.isinf(torch.tensor(scale)):
             scale = torch.tensor(3.4E38)
-        tmp = torch.ops.hpu.cast_to_fp8_v2(src_bin_begin, scale, False, False)[0]
+        tmp = torch.ops.hpu.cast_to_fp8_v2(src_bin_begin, scale, False, False, self.dtype)[0]
         dst_bin_begin = torch.ops.hpu.cast_from_fp8(tmp, None, torch.float32)
-        tmp = torch.ops.hpu.cast_to_fp8_v2(src_bin_end, scale, False, False)[0]
+        tmp = torch.ops.hpu.cast_to_fp8_v2(src_bin_end, scale, False, False, self.dtype)[0]
         dst_bin_end = torch.ops.hpu.cast_from_fp8(tmp, None, torch.float32)
         # get bin width of dst bin value, dst_bin_begin must contain 0 and the max qvalue.
         dst_bin = list(set(dst_bin_begin.detach().cpu().numpy()))

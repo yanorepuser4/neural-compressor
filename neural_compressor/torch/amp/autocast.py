@@ -61,19 +61,14 @@ class autocast:
             self.fast_dtype = dtype
         if cache_enabled is not None:
             self._cache_enabled = cache_enabled
-        if device_type == "hpu" and dtype in [float8_e4m3, float8_e5m2]:
-            if dtype == float8_e4m3:
-                os.environ["PT_USE_FP8_143"] = str(1)
-            else:
-                os.environ.pop("PT_USE_FP8_143", None)
-        else:
+        if not (device_type == "hpu" and dtype in [float8_e4m3, float8_e5m2]):
             self._autocast = torch.autocast(device_type, dtype, enabled, cache_enabled)
 
     def __enter__(self) -> None:
         if self.device == "hpu" and self.fast_dtype in [float8_e4m3, float8_e5m2]:
             from neural_compressor.torch.amp.modules.fp8_functions import replace_func
             # This function will replace F.linear and torch.matmul with the fp8 one
-            replace_func()
+            replace_func(self.fast_dtype)
         else:
             self._autocast.__enter__()
 
@@ -82,6 +77,5 @@ class autocast:
             from neural_compressor.torch.amp.modules.fp8_functions import recover_func
             # This function will recover F.linear and torch.matmul with the original one
             recover_func()
-            os.environ.pop("PT_USE_FP8_143", None)
         else:
             self._autocast.__exit__(exc_type, exc_value, traceback)

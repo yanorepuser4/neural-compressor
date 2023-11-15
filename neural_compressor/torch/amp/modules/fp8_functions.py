@@ -9,13 +9,14 @@ _F_linear = F.linear
 _torch_matmul = torch.matmul
 _torch_bmm = torch.bmm
 
-
-E4M3_AMAX = torch.tensor(240).to('hpu')
-E5M2_AMAX = torch.tensor(57344).to('hpu')
+DATA_TYPE = torch.float8_e4m3fn
+# without scale factor 0.9, the output will be abnormal.
+E4M3_AMAX = torch.tensor(240*0.9, dtype=torch.float).to('hpu')
+E5M2_AMAX = torch.tensor(57344*0.9, dtype=torch.float).to('hpu')
 
 
 def fp8_linear_forward(input, weight, bias):
-    dtype_amax = E4M3_AMAX if os.getenv('PT_USE_FP8_143') is not None else E5M2_AMAX
+    dtype_amax = E4M3_AMAX if DATA_TYPE == torch.float8_e4m3fn else E5M2_AMAX
     use_amax = False if os.getenv('PT_USE_FP8_AMAX') is None else True
     out_dtype = torch.float32
     logger.debug(f"F.linear dtype_amax: {dtype_amax}, use_amax: {use_amax}")
@@ -29,8 +30,8 @@ def fp8_linear_forward(input, weight, bias):
     else:
         input_scale, weight_scale = None, None
         input_scale_inv, weight_scale_inv = None, None
-    input = torch.ops.hpu.cast_to_fp8_v2(input, input_scale_inv, False, False)[0]
-    weight = torch.ops.hpu.cast_to_fp8_v2(weight, weight_scale_inv, False, False)[0]
+    input = torch.ops.hpu.cast_to_fp8_v2(input, input_scale_inv, False, False, DATA_TYPE)[0]
+    weight = torch.ops.hpu.cast_to_fp8_v2(weight, weight_scale_inv, False, False, DATA_TYPE)[0]
     out = torch.ops.hpu.fp8_gemm_v2(
         input,
         False,
@@ -47,8 +48,9 @@ def fp8_linear_forward(input, weight, bias):
 
 
 def fp8_matmul(input1, input2):
-    dtype_amax = E4M3_AMAX if os.getenv('PT_USE_FP8_143') is not None else E5M2_AMAX
+    dtype_amax = E4M3_AMAX if DATA_TYPE == torch.float8_e4m3fn else E5M2_AMAX
     use_amax = False if os.getenv('PT_USE_FP8_AMAX') is None else True
+    out_dtype = torch.float32
     logger.debug(f"torch.matmul dtype_amax: {dtype_amax}, use_amax: {use_amax}")
     if use_amax:
         input1_scale = dtype_amax / input1.data.abs().max()
@@ -58,15 +60,15 @@ def fp8_matmul(input1, input2):
     else:
         input1_scale, input2_scale = None, None
         input1_scale_inv, input2_scale_inv = None, None
-    input1 = torch.ops.hpu.cast_to_fp8_v2(input1, input1_scale, False, False)[0]
-    input2 = torch.ops.hpu.cast_to_fp8_v2(input2, input2_scale, False, False)[0]
+    input1 = torch.ops.hpu.cast_to_fp8_v2(input1, input1_scale, False, False, DATA_TYPE)[0]
+    input2 = torch.ops.hpu.cast_to_fp8_v2(input2, input2_scale, False, False, DATA_TYPE)[0]
     out = torch.ops.hpu.fp8_gemm_v2(
         input1,
         False,
         input2,
         False,
         None,
-        torch.float32,
+        out_dtype,
         input1_scale_inv, # inv is used for recover scale
         input2_scale_inv,
         None,
@@ -75,7 +77,9 @@ def fp8_matmul(input1, input2):
     return out
 
 
-def replace_func():
+def replace_func(dtype):
+    global DATA_TYPE
+    DATA_TYPE = dtype
     F.linear = fp8_linear_forward
     torch.matmul = fp8_matmul
     torch.bmm = fp8_matmul

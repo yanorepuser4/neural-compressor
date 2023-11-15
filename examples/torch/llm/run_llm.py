@@ -25,6 +25,8 @@ parser.add_argument("--quantize", action="store_true")
 parser.add_argument("--to_graph", action="store_true")
 parser.add_argument("--approach", type=str, default='static', 
                     help="Select from ['dynamic', 'static']")
+parser.add_argument("--precision", type=str, default='fp8_e4m3', 
+                    help="Select from ['fp8_e4m3', 'fp8_e5m2']")
 parser.add_argument("--accuracy", action="store_true")
 parser.add_argument("--batch_size", default=1, type=int,
                     help="For accuracy measurement only.")
@@ -83,12 +85,18 @@ user_model.eval()
 
 if args.quantize:
     print("device:", next(user_model.parameters()).device)
-    from neural_compressor.torch.quantization import get_static_qconfig
-    qconfig = get_static_qconfig()
+    from neural_compressor.torch.quantization import get_fp8_e5m2_qconfig, get_fp8_e4m3_qconfig
+    if args.precision == "fp8_e4m3":
+        dtype = torch.float8_e4m3fn
+        qconfig = get_fp8_e4m3_qconfig()
+    else:
+        dtype = torch.float8_e5m2
+        qconfig = get_fp8_e5m2_qconfig()
+
 
     from neural_compressor.torch.quantization.fp8 import quantize_dynamic, quantize
     if args.approach == "dynamic":
-        user_model = quantize_dynamic(user_model)
+        user_model = quantize_dynamic(user_model, dtype, inplace=True)
     else:
         # dataset
         from datasets import load_dataset
@@ -109,7 +117,7 @@ if args.quantize:
                     attention_mask=calib_input["attention_mask"],
                 )
 
-        user_model = quantize(user_model, qconfig, calib_func=calib_func)
+        user_model = quantize(user_model, qconfig, calib_func=calib_func, inplace=True)
 
     if args.to_graph:
         import habana_frameworks.torch.hpu.graphs as htgraphs

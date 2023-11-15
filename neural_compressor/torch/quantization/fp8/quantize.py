@@ -14,17 +14,23 @@ quantization_mapping = {
 white_list = tuple(quantization_mapping.keys())
 
 
-def quantize_dynamic(model, inplace=True):
+# without scale factor 0.9, the output will be abnormal.
+E4M3_AMAX = torch.tensor(240*0.9, dtype=torch.float).to('hpu')
+E5M2_AMAX = torch.tensor(57344*0.9, dtype=torch.float).to('hpu')
+
+
+def quantize_dynamic(model, dtype=torch.float8_e4m3fn, inplace=True):
     q_model = model if inplace else copy.deepcopy(model)
     from neural_compressor.torch.quantization.fp8.modules import FP8DynamicLinear
     for n, m in q_model.named_modules():
         if isinstance(m, torch.nn.Linear):
-            new_m = FP8DynamicLinear(m, use_amax=True)
+            new_m = FP8DynamicLinear(m, dtype, use_amax=True)
             set_module(q_model, n, new_m)
     return q_model
 
 
-def _add_observer(model, algorithm='minmax'):
+def _add_observer(model, qconfig):
+    algorithm = qconfig.act_algo
     def input_observer_forward_pre_hook(self, input):
         try:
             if isinstance(input[0], torch.Tensor):
@@ -52,12 +58,12 @@ def _add_observer(model, algorithm='minmax'):
 
 
 def prepare(model, qconfig):
-    _add_observer(model, algorithm=qconfig.act_algo)
+    _add_observer(model, qconfig)
     return model
 
-def _remove_observer(model):
+def _remove_observer(model, qconfig):
     for name, module in model.named_modules():
-        HF_max = 240 if os.getenv('PT_USE_FP8_143') is not None else 57344
+        HF_max = E4M3_AMAX if qconfig.dtype == torch.float8_e4m3fn else E5M2_AMAX
         if hasattr(module, 'input_activation_post_process'):
             if hasattr(module.input_activation_post_process, '_non_linear_param_search'):  # kl
                 min_val, max_val = module.input_activation_post_process._non_linear_param_search()
@@ -89,18 +95,19 @@ def _remove_observer(model):
         for handle_id in handle_ids_to_remove:
             hook_map.pop(handle_id)
 
-def _replace_module(model):
+
+def _replace_module(model, qconfig):
     from neural_compressor.torch.quantization.fp8.modules import FP8Linear
     for name, module in model.named_modules():
         if isinstance(module, white_list):
             QModule = quantization_mapping[type(module)]
-            module = QModule(module)
+            module = QModule(module, qconfig.dtype)
             set_module(model, name, module)
 
 
-def convert(model):
-    _remove_observer(model)
-    _replace_module(model)
+def convert(model, qconfig):
+    _remove_observer(model, qconfig)
+    _replace_module(model, qconfig)
     return model
 
 
@@ -108,7 +115,7 @@ def quantize(model, qconfig, calib_func, inplace=True):
     q_model = model if inplace else copy.deepcopy(model)
     q_model = prepare(q_model, qconfig)
     calib_func(q_model)
-    q_model = convert(q_model)
+    q_model = convert(q_model, qconfig)
     return q_model
 
 
