@@ -1,0 +1,6 @@
+transformers
+datasets
+SentencePiece
+intel_extension_for_transformers
+lm_eval
+

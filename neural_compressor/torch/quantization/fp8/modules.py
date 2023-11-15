@@ -41,13 +41,14 @@ class FP8DynamicLinear(torch.nn.Module):
         # scale = HF_max /amax
         if self.use_amax:
             self.weight_scale = self.dtype_amax / org_module.weight.data.abs().max()
-            self.weight_scale_inv = 1.0 / self.weight_scale
+            self.weight_scale_inv = torch.reciprocal(self.weight_scale)
         else:
             self.weight_scale = None
             self.weight_scale_inv = None
         self.weight = torch.ops.hpu.cast_to_fp8_v2(
             org_module.weight.data, self.weight_scale, False, False, self.dtype
         )[0]
+
         if org_module.bias is not None:
             self.bias = org_module.bias.data.type(self.out_dtype)
         else:
@@ -56,11 +57,11 @@ class FP8DynamicLinear(torch.nn.Module):
     def forward(self, inp):
         if self.use_amax:
             input_scale = self.dtype_amax / inp.abs().max()
-            input_scale_inv = 1.0 / input_scale
+            input_scale_inv = torch.reciprocal(input_scale)
         else:
             input_scale = None
             input_scale_inv = None
-        logger.debug(f"dtype_amax: {self.dtype_amax}, use_amax: {self.use_amax}")
+
         assert inp.shape[-1] == self.in_features, "GEMM not possible"
         inputmat = inp.view((-1, self.in_features))
         inputmat = torch.ops.hpu.cast_to_fp8_v2(inputmat, input_scale, False, False, self.dtype)[0]
@@ -122,14 +123,14 @@ class FP8Linear(torch.nn.Module):
                 dtype=self.out_dtype,
             ) 
         )
-        self.scale_inv = 1.0 / self.scale
-        # user configuration
-        # scale = HF_max /amax
+        self.scale_inv = torch.reciprocal(self.scale)
+
         self.weight_scale = self.dtype_amax / org_module.weight.data.abs().max()
-        self.weight_scale_inv = 1.0 / self.weight_scale
+        self.weight_scale_inv = torch.reciprocal(self.weight_scale)
         self.weight = torch.ops.hpu.cast_to_fp8_v2(
             org_module.weight.data, self.weight_scale, False, False, self.dtype
         )[0]
+
         if org_module.bias is not None:
             self.bias = org_module.bias.data.type(self.out_dtype)
         else:
@@ -184,14 +185,14 @@ class FP8Matmul(torch.nn.Module):
                 dtype=self.out_dtype,
             ) 
         )
+        self.input1_scale_inv = torch.reciprocal(self.scale)
+        self.input2_scale_inv = torch.reciprocal(self.scale1)
 
     def forward(self, input1, input2):
         dim1 = input1.shape[-1]
         dim2 = input2.shape[-2]
         assert dim1 == dim2, "GEMM not possible"
 
-        input1_scale_inv = 1.0 / self.scale
-        input2_scale_inv = 1.0 / self.scale1
         input1 = torch.ops.hpu.cast_to_fp8_v2(input1, self.scale, False, False, self.dtype)[0]
         input2 = torch.ops.hpu.cast_to_fp8_v2(input2, self.scale1, False, False, self.dtype)[0]
         out = torch.ops.hpu.fp8_gemm_v2(
@@ -201,8 +202,8 @@ class FP8Matmul(torch.nn.Module):
             False,
             None,
             self.out_dtype,
-            input1_scale_inv, # inv is used for recover scale
-            input2_scale_inv,
+            self.input1_scale_inv, # inv is used for recover scale
+            self.input2_scale_inv,
             None,
             False,
         )
