@@ -63,10 +63,11 @@ class FP8DynamicLinear(torch.nn.Module):
             input_scale_inv = None
 
         assert inp.shape[-1] == self.in_features, "GEMM not possible"
-        inputmat = inp.view((-1, self.in_features))
-        inputmat = torch.ops.hpu.cast_to_fp8_v2(inputmat, input_scale, False, False, self.dtype)[0]
+        org_middle_shape = inp.shape[1:-1]
+        inp = inp.view((-1, self.in_features))
+        inp = torch.ops.hpu.cast_to_fp8_v2(inp, input_scale, False, False, self.dtype)[0]
         out = torch.ops.hpu.fp8_gemm_v2(
-            inputmat,
+            inp,
             False,
             self.weight,
             True,
@@ -77,7 +78,7 @@ class FP8DynamicLinear(torch.nn.Module):
             self.bias,
             False,
         )
-        return out.view(-1, *inp.shape[1:-1], out.shape[-1])
+        return out.view(-1, *org_middle_shape, out.shape[-1])
 
     def extra_repr(self) -> str:
         return 'in_features={}, out_features={}, bias={}, format={}'.format(
@@ -138,10 +139,11 @@ class FP8Linear(torch.nn.Module):
 
     def forward(self, inp):
         assert inp.shape[-1] == self.in_features, "GEMM not possible"
-        inputmat = inp.view((-1, self.in_features))
-        inputmat = torch.ops.hpu.cast_to_fp8_v2(inputmat, self.scale, False, False, self.dtype)[0]
+        org_middle_shape = inp.shape[1:-1]
+        inp = inp.view((-1, self.in_features))
+        inp = torch.ops.hpu.cast_to_fp8_v2(inp, self.scale, False, False, self.dtype)[0]
         out = torch.ops.hpu.fp8_gemm_v2(
-            inputmat,
+            inp,
             False,
             self.weight,
             True,
@@ -152,7 +154,7 @@ class FP8Linear(torch.nn.Module):
             self.bias,
             False,
         )
-        return out.view(-1, *inp.shape[1:-1], out.shape[-1])
+        return out.view(-1, *org_middle_shape, out.shape[-1])
 
     def extra_repr(self) -> str:
         return 'in_features={}, out_features={}, bias={}, scale={}, format={}'.format(
