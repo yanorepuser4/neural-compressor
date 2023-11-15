@@ -19,7 +19,6 @@ def fp8_linear_forward(input, weight, bias):
     dtype_amax = E4M3_AMAX if DATA_TYPE == torch.float8_e4m3fn else E5M2_AMAX
     use_amax = False if os.getenv('PT_USE_FP8_AMAX') is None else True
     out_dtype = torch.float32
-    logger.debug(f"F.linear dtype_amax: {dtype_amax}, use_amax: {use_amax}")
     input_raw = input
     input = input.view((-1, weight.shape[-1]))
     if use_amax:
@@ -51,7 +50,6 @@ def fp8_matmul(input1, input2):
     dtype_amax = E4M3_AMAX if DATA_TYPE == torch.float8_e4m3fn else E5M2_AMAX
     use_amax = False if os.getenv('PT_USE_FP8_AMAX') is None else True
     out_dtype = torch.float32
-    logger.debug(f"torch.matmul dtype_amax: {dtype_amax}, use_amax: {use_amax}")
     if use_amax:
         input1_scale = dtype_amax / input1.data.abs().max()
         input2_scale = dtype_amax / input2.data.abs().max()
