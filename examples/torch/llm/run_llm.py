@@ -21,10 +21,9 @@ parser.add_argument(
     help="Transformers parameter: set the model hub commit number")
 parser.add_argument("--dataset", nargs="?", default="NeelNanda/pile-10k", const="NeelNanda/pile-10k")
 parser.add_argument("--output_dir", nargs="?", default="./saved_results")
-parser.add_argument("--quantize", action="store_true")
 parser.add_argument("--to_graph", action="store_true")
 parser.add_argument("--approach", type=str, default='static', 
-                    help="Select from ['dynamic', 'static']")
+                    help="Select from ['dynamic', 'static' 'cast']")
 parser.add_argument("--precision", type=str, default='fp8_e4m3', 
                     help="Select from ['fp8_e4m3', 'fp8_e5m2']")
 parser.add_argument("--accuracy", action="store_true")
@@ -38,6 +37,8 @@ parser.add_argument("--tasks", nargs='+', default=["wikitext"], type=str, \
                     choices=["winogrande", "copa", "piqa", "rte", "hellaswag", \
                     "openbookqa", "lambada_openai", "lambada_standard", "wikitext"],
                     help="tasks list for accuracy validation")
+parser.add_argument("--limit", default=None, type=int,
+                    help="the sample num of evaluation.")
 args = parser.parse_args()
 
 
@@ -83,7 +84,7 @@ else:
 user_model = user_model.to(memory_format=torch.channels_last)
 user_model.eval()
 
-if args.quantize:
+if args.approach in ["dynamic", "static"]:
     print("device:", next(user_model.parameters()).device)
     from neural_compressor.torch.quantization import get_fp8_e5m2_qconfig, get_fp8_e4m3_qconfig
     if args.precision == "fp8_e4m3":
@@ -97,7 +98,7 @@ if args.quantize:
     from neural_compressor.torch.quantization.fp8 import quantize_dynamic, quantize
     if args.approach == "dynamic":
         user_model = quantize_dynamic(user_model, dtype, inplace=True)
-    else:
+    elif args.approach == "static":
         # dataset
         from datasets import load_dataset
         calib_dataset = load_dataset(args.dataset, split="train").select(range(100))
@@ -119,20 +120,39 @@ if args.quantize:
 
         user_model = quantize(user_model, qconfig, calib_func=calib_func, inplace=True)
 
-    if args.to_graph:
-        import habana_frameworks.torch.hpu.graphs as htgraphs
-        user_model = htgraphs.wrap_in_hpu_graph(user_model)
+if args.to_graph:
+    import habana_frameworks.torch.hpu.graphs as htgraphs
+    user_model = htgraphs.wrap_in_hpu_graph(user_model)
 
 if args.accuracy:
     from intel_extension_for_transformers.llm.evaluation.lm_eval import evaluate
-    results = evaluate(
-        model="hf-causal",
-        model_args='pretrained='+args.model+',tokenizer='+args.model+',dtype=float32',
-        user_model=user_model,
-        batch_size=args.batch_size,
-        tasks=args.tasks,
-        device='hpu',
-    )
+    if args.approach == "cast":
+        from neural_compressor.torch.amp import autocast
+        from neural_compressor.torch.dtype import float8_e4m3, float8_e5m2
+        if args.precision == "fp8_e4m3":
+            dtype = float8_e4m3
+        else:
+            dtype = float8_e5m2
+        with autocast('hpu', dtype=dtype):
+            results = evaluate(
+                model="hf-causal",
+                model_args='pretrained='+args.model+',tokenizer='+args.model+',dtype=float32',
+                user_model=user_model,
+                batch_size=args.batch_size,
+                tasks=args.tasks,
+                device='hpu',
+                limit=args.limit,
+            )
+    else:
+        results = evaluate(
+            model="hf-causal",
+            model_args='pretrained='+args.model+',tokenizer='+args.model+',dtype=float32',
+            user_model=user_model,
+            batch_size=args.batch_size,
+            tasks=args.tasks,
+            device='hpu',
+            limit=args.limit,
+        )
     dumped = json.dumps(results, indent=2)
     for task_name in args.tasks:
         if task_name == "wikitext":
