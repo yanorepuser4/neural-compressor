@@ -3,10 +3,11 @@ import time
 import json
 import re
 import torch
-from torch.nn.functional import pad
-from torch.utils.data import DataLoader
+import transformers
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import habana_frameworks.torch.hpex
+import lm_eval.tasks
+import lm_eval.evaluator
 
 
 parser = argparse.ArgumentParser()
@@ -39,21 +40,21 @@ parser.add_argument("--tasks", nargs='+', default=["wikitext"], type=str, \
                     help="tasks list for accuracy validation")
 parser.add_argument("--limit", default=None, type=int,
                     help="the sample num of evaluation.")
+parser.add_argument('--buckets', type=int, nargs='+', \
+                    help="Input length buckets to use with static_shapes", default=[512])
+
 args = parser.parse_args()
 
 
 if re.search("llama", args.model.lower()):
-    import transformers
-    from transformers import LlamaForCausalLM, LlamaTokenizer
-    user_model = LlamaForCausalLM.from_pretrained(
+    user_model = transformers.LlamaForCausalLM.from_pretrained(
         args.model,
         revision=args.revision,
         device_map='hpu',
     )
-    tokenizer = LlamaTokenizer.from_pretrained(args.model)
+    tokenizer = AutoTokenizer.from_pretrained(args.model)
 elif re.search("mpt-7b-chat", args.model.lower()):
-    from mpt_7b.modeling_mpt import MPTForCausalLM
-    user_model = MPTForCausalLM.from_pretrained(
+    user_model = transformers.MPTForCausalLM.from_pretrained(
         args.model,
         trust_remote_code=args.trust_remote_code,
         revision=args.revision,
@@ -62,8 +63,7 @@ elif re.search("mpt-7b-chat", args.model.lower()):
     tokenizer = AutoTokenizer.from_pretrained(args.model)
     user_model.config.use_cache = True
 elif re.search("falcon-7b-instruct", args.model.lower()):
-    from falcon_7b_instruct.modelling_RW import RWForCausalLM
-    user_model = RWForCausalLM.from_pretrained(
+    user_model = transformers.RWForCausalLM.from_pretrained(
         args.model,
         trust_remote_code=args.trust_remote_code,
         revision=args.revision,
@@ -125,38 +125,73 @@ if args.to_graph:
     user_model = htgraphs.wrap_in_hpu_graph(user_model)
 
 if args.accuracy:
-    from intel_extension_for_transformers.llm.evaluation.lm_eval import evaluate
-    if args.approach == "cast":
-        from neural_compressor.torch.amp import autocast
-        from neural_compressor.torch.dtype import float8_e4m3, float8_e5m2
-        if args.precision == "fp8_e4m3":
-            dtype = float8_e4m3
-        else:
-            dtype = float8_e5m2
-        with autocast('hpu', dtype=dtype):
-            results = evaluate(
-                model="hf-causal",
-                model_args='pretrained='+args.model+',tokenizer='+args.model+',dtype=float32',
-                user_model=user_model,
-                batch_size=args.batch_size,
-                tasks=args.tasks,
-                device='hpu',
-                limit=args.limit,
-            )
-    else:
-        results = evaluate(
-            model="hf-causal",
-            model_args='pretrained='+args.model+',tokenizer='+args.model+',dtype=float32',
-            user_model=user_model,
-            batch_size=args.batch_size,
-            tasks=args.tasks,
-            device='hpu',
-            limit=args.limit,
-        )
-    dumped = json.dumps(results, indent=2)
-    for task_name in args.tasks:
-        if task_name == "wikitext":
-            print("Accuracy for %s is: %s" % (task_name, results["results"][task_name]["word_perplexity"]))
-        else:
-            print("Accuracy for %s is: %s" % (task_name, results["results"][task_name]["acc"]))
 
+    class HabanaModelAdapter(lm_eval.base.BaseLM):
+        def __init__(self, tokenizer, model, args, options):
+            super().__init__()
+            self.tokenizer = tokenizer
+            self.model = model
+            self._batch_size = args.batch_size
+            self.buckets = list(sorted(args.buckets))
+            self.options = options
+            self._device = "hpu"
+
+        @property
+        def eot_token_id(self):
+            return self.model.config.eos_token_id
+
+        @property
+        def max_length(self):
+            return self.buckets[-1]
+
+        @property
+        def max_gen_toks(self):
+            raise NotImplementedError()
+
+        @property
+        def batch_size(self):
+            return self._batch_size
+
+        @property
+        def device(self):
+            # We need to do padding ourselves, otherwise we'll end up with recompilations
+            # Returning 'cpu' to keep tensors on CPU in lm_eval code
+            return 'cpu'
+
+        def tok_encode(self, string):
+            return self.tokenizer.encode(string)
+
+        def tok_decode(self, tokens):
+            return self.tokenizer.decode(tokens)
+
+        def _model_generate(self, context, max_length, eos_token_id):
+            raise NotImplementedError()
+
+        def find_bucket(self, length):
+            return [b for b in self.buckets if b >= length][0]
+
+        def _model_call(self, inps):
+            print(inps.shape)
+
+            seq_length = inps.shape[-1]
+            bucket_length = self.find_bucket(seq_length)
+            padding_length = bucket_length - seq_length
+            if True:
+                import torch.nn.functional as F
+                inps = F.pad(inps, (0, padding_length), value=self.model.config.pad_token_id)
+            print(inps.shape)
+
+            logits = self.model(inps.to(self._device))['logits'].cpu()
+            if True and padding_length > 0:
+                logits = logits[:, :-padding_length, :]
+            logits = logits.to(torch.float32)
+            return logits
+
+    lm_tasks = lm_eval.tasks.get_task_dict(args.tasks)
+    options = None
+    lm = HabanaModelAdapter(tokenizer, user_model, args, options)
+
+    eval_start = time.perf_counter()
+    results = lm_eval.evaluator.evaluate(lm, lm_tasks)
+    eval_end = time.perf_counter()
+    print("Duration:", eval_end - eval_start)
