@@ -105,7 +105,7 @@ if args.quantize:
         calib_data = []
         for examples in calib_dataset:
             calib_data.append(
-                tokenizer(examples["text"], return_tensors="pt", padding=True, max_length=128)
+                tokenizer(examples["text"], return_tensors="pt", max_length=128)
             )
 
         def calib_func(model):
