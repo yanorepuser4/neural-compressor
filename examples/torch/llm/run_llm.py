@@ -50,7 +50,8 @@ args = parser.parse_args()
 
 
 if re.search("llama", args.model.lower()):
-    user_model = transformers.LlamaForCausalLM.from_pretrained(
+    from modeling_llama import LlamaForCausalLM
+    user_model = LlamaForCausalLM.from_pretrained(
         args.model,
         revision=args.revision,
         device_map='hpu',
@@ -131,6 +132,7 @@ if args.generate:
     input_prompt = "DeepSpeed is a machine learning framework"
     print("Prompt sentence:", input_prompt)
     input_tokens = tokenizer(input_prompt, return_tensors="pt").to('hpu')
+    eval_start = time.perf_counter()
     if args.approach == "cast":
         from neural_compressor.torch.amp import autocast
         from neural_compressor.torch.dtype import float8_e4m3, float8_e5m2
@@ -143,7 +145,9 @@ if args.generate:
     else:
         outputs = user_model.generate(**input_tokens, max_new_tokens=args.max_new_tokens)
     output_sentence = tokenizer.batch_decode(outputs, skip_special_tokens=True)
+    eval_end = time.perf_counter()
     print("Generated sentence:", output_sentence)
+    print("Duration:", eval_end - eval_start)
 
 if args.accuracy:
 
