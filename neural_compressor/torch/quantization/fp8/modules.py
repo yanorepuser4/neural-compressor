@@ -24,7 +24,7 @@ class FP8DynamicLinear(torch.nn.Module):
         self.weight_dtype = torch.int8
         self.out_dtype = torch.float32
         self.register_buffer(
-            'weight', 
+            'weight',
             torch.empty(
                 self.out_features,
                 self.in_features,
@@ -33,12 +33,12 @@ class FP8DynamicLinear(torch.nn.Module):
             )
         )
         self.register_buffer(
-            'bias', 
+            'bias',
             torch.empty(
                 self.out_features,
                 device="hpu",
                 dtype=self.out_dtype,
-            ) 
+            )
         )
         # user configuration
         # scale = HF_max /amax
@@ -162,7 +162,7 @@ class FP8Linear(torch.nn.Module):
         self.weight_dtype = torch.int8
         self.out_dtype = torch.float32
         self.register_buffer(
-            'weight', 
+            'weight',
             torch.empty(
                 self.out_features,
                 self.in_features,
@@ -171,21 +171,21 @@ class FP8Linear(torch.nn.Module):
             )
         )
         self.register_buffer(
-            'bias', 
+            'bias',
             torch.empty(
                 self.out_features,
                 device="hpu",
                 dtype=self.out_dtype,
-            ) 
+            )
         )
         assert hasattr(org_module, "scale"), "scale is not recorded when convert to FP8Linear."
         self.register_buffer(
-            'scale', 
+            'scale',
             torch.tensor(
                 org_module.scale,
                 device="hpu",
                 dtype=self.out_dtype,
-            ) 
+            )
         )
         self.scale_inv = torch.reciprocal(self.scale)
 
@@ -237,20 +237,20 @@ class FP8Matmul(torch.nn.Module):
         assert hasattr(org_module, "scale") and hasattr(org_module, "scale1"), \
                 "scale is not recorded when convert to FP8Linear."
         self.register_buffer(
-            'scale', 
+            'scale',
             torch.tensor(
                 org_module.scale,
                 device="hpu",
                 dtype=self.out_dtype,
-            ) 
+            )
         )
         self.register_buffer(
-            'scale1', 
+            'scale1',
             torch.tensor(
                 org_module.scale1,
                 device="hpu",
                 dtype=self.out_dtype,
-            ) 
+            )
         )
         self.input1_scale_inv = torch.reciprocal(self.scale)
         self.input2_scale_inv = torch.reciprocal(self.scale1)
@@ -292,8 +292,6 @@ class FP8Matmul(torch.nn.Module):
 class FP8BatchMatmul(FP8Matmul):
     pass
 
-
-
 class FP8Cast(torch.nn.Module):
     def __init__(self, org_module=None, dtype=torch.float8_e4m3fn) -> None:
         super().__init__()
@@ -304,12 +302,12 @@ class FP8Cast(torch.nn.Module):
             org_module.to('hpu')
             assert hasattr(org_module, "scale"), "scale is not recorded when convert to FP8Cast."
             self.register_buffer(
-                'scale', 
+                'scale',
                 torch.tensor(
                     org_module.scale,
                     device="hpu",
                     dtype=self.out_dtype,
-                ) 
+                )
             )
             self.scale = None # due to next matmul doesn't know this scale
         else:
@@ -328,3 +326,242 @@ class FP8Cast(torch.nn.Module):
             (self.scale), self.dtype,
         )
 
+class FP8LinearLayer(torch.nn.Module):
+    def __init__(self, org_module, dtype) -> None:
+        super().__init__()
+        # attributes
+        org_module.to('hpu')
+        self.dtype = dtype
+        self.dtype_amax = E4M3_AMAX if self.dtype == torch.float8_e4m3fn else E5M2_AMAX
+        self.in_features = org_module.weight.shape[1]
+        self.out_features = org_module.weight.shape[0]
+        self.weight_dtype = torch.int8
+        self.out_dtype = torch.float32
+        self.register_buffer(
+            'weight',
+            torch.empty(
+                self.out_features,
+                self.in_features,
+                device="hpu",
+                dtype=self.weight_dtype,
+            )
+        )
+        assert hasattr(org_module, "scale"), "scale is not recorded when convert to FP8Linear."
+        self.register_buffer(
+            'scale',
+            torch.tensor(
+                org_module.scale,
+                device="hpu",
+                dtype=self.out_dtype,
+            )
+        )
+        self.scale_inv = 1.0 / self.scale
+        # user configuration
+        # scale = HF_max /amax
+        self.weight_scale = self.dtype_amax / org_module.weight.data.abs().max()
+        self.weight_scale_inv = 1.0 / self.weight_scale
+        self.weight = torch.ops.hpu.cast_to_fp8_v2(
+            org_module.weight.data, self.weight_scale, False, False, self.dtype
+        )[0]
+        if org_module.bias is not None:
+            self.register_buffer(
+                'bias',
+                torch.empty(
+                    self.out_features,
+                    device="hpu",
+                    dtype=self.out_dtype,
+                )
+            )
+            self.bias = org_module.bias.data.type(self.out_dtype)
+        else:
+            self.bias = None
+
+    def forward(self, inp):
+        assert inp.shape[-1] == self.in_features, "GEMM not possible"
+        inputmat = inp.view((-1, self.in_features))
+        inputmat = torch.ops.hpu.cast_to_fp8_v2(inputmat, self.scale, False, False, self.dtype)[0]
+        out = torch.ops.hpu.fp8_gemm_v2(
+            inputmat,
+            False,
+            self.weight,
+            True,
+            None,
+            self.out_dtype,
+            self.scale_inv, # inv is used for recover scale
+            self.weight_scale_inv,
+            None,
+            False,
+        )
+        if self.bias is not None:
+            out += self.bias
+        return out.view(-1, *inp.shape[1:-1], out.shape[-1])
+
+    def extra_repr(self) -> str:
+        return 'in_features={}, out_features={}, bias={}, scale={}, format={}'.format(
+            self.in_features, self.out_features, self.bias is not None, self.scale, self.dtype,
+        )
+
+class FP8LinearAllreduce(torch.nn.Module):
+    def __init__(self, org_module, dtype) -> None:
+        super().__init__()
+        # attributes
+        org_module.to('hpu')
+        self.dtype = dtype
+        self.dtype_amax = E4M3_AMAX if self.dtype == torch.float8_e4m3fn else E5M2_AMAX
+        self.in_features = org_module.weight.shape[1]
+        self.out_features = org_module.weight.shape[0]
+        self.weight_dtype = torch.int8
+        self.out_dtype = torch.float32
+        self.register_buffer(
+            'weight',
+            torch.empty(
+                self.out_features,
+                self.in_features,
+                device="hpu",
+                dtype=self.weight_dtype,
+            )
+        )
+        assert hasattr(org_module, "scale"), "scale is not recorded when convert to FP8Linear."
+        self.register_buffer(
+            'scale',
+            torch.tensor(
+                org_module.scale,
+                device="hpu",
+                dtype=self.out_dtype,
+            )
+        )
+        self.scale_inv = 1.0 / self.scale
+        # user configuration
+        # scale = HF_max /amax
+        self.weight_scale = self.dtype_amax / org_module.weight.data.abs().max()
+        self.weight_scale_inv = 1.0 / self.weight_scale
+        self.weight = torch.ops.hpu.cast_to_fp8_v2(
+            org_module.weight.data, self.weight_scale, False, False, self.dtype
+        )[0]
+        if org_module.bias is not None:
+            self.register_buffer(
+                'bias',
+                torch.empty(
+                    self.out_features,
+                    device="hpu",
+                    dtype=self.out_dtype,
+                )
+            )
+            self.bias = org_module.bias.data.type(self.out_dtype)
+        else:
+            self.bias = None
+        self.mp_group = org_module.mp_group
+
+    def forward(self, inp):
+        assert inp.shape[-1] == self.in_features, "GEMM not possible"
+        inputmat = inp.view((-1, self.in_features))
+        inputmat = torch.ops.hpu.cast_to_fp8_v2(inputmat, self.scale, False, False, self.dtype)[0]
+        out = torch.ops.hpu.fp8_gemm_v2(
+            inputmat,
+            False,
+            self.weight,
+            True,
+            None,
+            self.out_dtype,
+            self.scale_inv, # inv is used for recover scale
+            self.weight_scale_inv,
+            None,
+            False,
+        )
+        from deepspeed import comm as dist
+        if self.mp_group is not None:
+            dist.inference_all_reduce(out, group=self.mp_group)
+        if self.bias is not None:
+            out += self.bias
+        return out.view(-1, *inp.shape[1:-1], out.shape[-1])
+
+    def extra_repr(self) -> str:
+        return 'in_features={}, out_features={}, bias={}, scale={}, format={}'.format(
+            self.in_features, self.out_features, self.bias is not None, self.scale, self.dtype,
+        )
+
+class FP8LmHeadLinearAllreduce(torch.nn.Module):
+    def __init__(self, org_module, dtype) -> None:
+        super().__init__()
+        # attributes
+        org_module.to('hpu')
+        self.dtype = dtype
+        self.dtype_amax = E4M3_AMAX if self.dtype == torch.float8_e4m3fn else E5M2_AMAX
+        self.in_features = org_module.weight.shape[1]
+        self.out_features = org_module.weight.shape[0]
+        self.weight_dtype = torch.int8
+        self.out_dtype = torch.float32
+        self.register_buffer(
+            'weight',
+            torch.empty(
+                self.out_features,
+                self.in_features,
+                device="hpu",
+                dtype=self.weight_dtype,
+            )
+        )
+        assert hasattr(org_module, "scale"), "scale is not recorded when convert to FP8Linear."
+        self.register_buffer(
+            'scale',
+            torch.tensor(
+                org_module.scale,
+                device="hpu",
+                dtype=self.out_dtype,
+            )
+        )
+        self.scale_inv = 1.0 / self.scale
+        # user configuration
+        # scale = HF_max /amax
+        self.weight_scale = self.dtype_amax / org_module.weight.data.abs().max()
+        self.weight_scale_inv = 1.0 / self.weight_scale
+        self.weight = torch.ops.hpu.cast_to_fp8_v2(
+            org_module.weight.data, self.weight_scale, False, False, self.dtype
+        )[0]
+        if org_module.bias is not None:
+            self.register_buffer(
+                'bias',
+                torch.empty(
+                    self.out_features,
+                    device="hpu",
+                    dtype=self.out_dtype,
+                )
+            )
+            self.bias = org_module.bias.data.type(self.out_dtype)
+        else:
+            self.bias = None
+        self.mp_group = org_module.mp_group
+        self.rank = org_module.rank
+        self.world_size = org_module.world_size
+
+    def forward(self, inp):
+        assert inp.shape[-1] == self.in_features, "GEMM not possible"
+
+        from deepspeed.module_inject.tp_shard import get_shard_size, get_shard_size_list
+        input_shard_size = get_shard_size(inp.shape[-1], self.world_size)
+        input_shard_offset = sum(get_shard_size_list(inp.shape[-1], self.world_size)[0:self.rank])
+
+        inputmat = inp[:, :, input_shard_offset:input_shard_offset + input_shard_size]
+        inputmat = torch.ops.hpu.cast_to_fp8_v2(inputmat, self.scale, False, False, self.dtype)[0]
+        out = torch.ops.hpu.fp8_gemm_v2(
+            inputmat,
+            False,
+            self.weight,
+            True,
+            None,
+            self.out_dtype,
+            self.scale_inv, # inv is used for recover scale
+            self.weight_scale_inv,
+            None,
+            False,
+        )
+        from deepspeed import comm as dist
+        if self.mp_group is not None:
+            dist.inference_all_reduce(out, group=org_module.mp_group)
+        if self.bias is not None:
+            out += self.bias
+        return out.view(-1, *inp.shape[1:-1], out.shape[-1])
+
+    def extra_repr(self) -> str:
+        return 'in_features={}, out_features={}, bias={}, scale={}, format={}'.format(
+            self.in_features, self.out_features, self.bias is not None, self.scale, self.dtype,
+        )

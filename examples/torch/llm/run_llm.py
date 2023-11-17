@@ -24,9 +24,9 @@ parser.add_argument(
 parser.add_argument("--dataset", nargs="?", default="NeelNanda/pile-10k", const="NeelNanda/pile-10k")
 parser.add_argument("--output_dir", nargs="?", default="./saved_results")
 parser.add_argument("--to_graph", action="store_true")
-parser.add_argument("--approach", type=str, default=None, 
+parser.add_argument("--approach", type=str, default=None,
                     help="Select from ['dynamic', 'static' 'cast']")
-parser.add_argument("--precision", type=str, default='fp8_e4m3', 
+parser.add_argument("--precision", type=str, default='fp8_e4m3',
                     help="Select from ['fp8_e4m3', 'fp8_e5m2', 'bf16', 'fp16'], \
                         ['bf16', 'fp16'] only work with cast approach")
 parser.add_argument("--accuracy", action="store_true")
@@ -47,7 +47,10 @@ parser.add_argument("--max_new_tokens", default=100, type=int,
                     help="calibration iters.")
 parser.add_argument('--buckets', type=int, nargs='+', \
                     help="Input length buckets to use with static_shapes", default=[129])
-
+parser.add_argument("--local_rank",
+                    type=int,
+                    default=-1,
+                    help="local_rank for distributed training on gpus")
 args = parser.parse_args()
 
 
@@ -55,14 +58,23 @@ if args.approach is None:
     import habana_frameworks.torch.core as htcore
     htcore.hpu_set_env()
 
+import os
+import deepspeed
+world_size = int(os.getenv('WORLD_SIZE', '1'))
+
 # model
-if re.search("llama", args.model.lower()):
-    from models.modeling_llama import LlamaForCausalLM
-    user_model = LlamaForCausalLM.from_pretrained(
-        args.model,
-        revision=args.revision,
-        device_map='hpu',
-    )
+if re.search("llama", args.model.lower()) or re.search("bloom", args.model.lower()):
+    from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
+    torch.device('hpu')
+    config = AutoConfig.from_pretrained(args.model)
+    if world_size > 1:
+        model_dtype = torch.bfloat16
+        deepspeed.init_distributed(dist_backend="hccl")
+        with deepspeed.OnDevice(dtype=model_dtype, device="meta"):
+            user_model = AutoModelForCausalLM.from_config(config, torch_dtype=model_dtype)
+    else:
+        model_dtype = torch.float16
+        user_model = AutoModelForCausalLM.from_pretrained(args.model, torch_dtype=model_dtype)
 elif re.search("chatglm", args.model.lower()):
     from models.modeling_chatglm import ChatGLMForConditionalGeneration
     user_model = ChatGLMForConditionalGeneration.from_pretrained(
@@ -71,6 +83,7 @@ elif re.search("chatglm", args.model.lower()):
         device_map='hpu',
     )
 else:
+    model_dtype = torch.float32
     user_model = AutoModelForCausalLM.from_pretrained(
         args.model,
         trust_remote_code=args.trust_remote_code,
@@ -81,22 +94,33 @@ else:
 if re.search("baichuan", args.model.lower()):
     from models.tokenization_baichuan import BaichuanTokenizer
     tokenizer = BaichuanTokenizer.from_pretrained(
-        args.model, 
+        args.model,
         trust_remote_code=args.trust_remote_code
     )
 else:
     tokenizer = AutoTokenizer.from_pretrained(
-        args.model, 
+        args.model,
         trust_remote_code=args.trust_remote_code
     )
 
-if args.approach is None:
+import os
+world_size = int(os.getenv('WORLD_SIZE', '1'))
+if args.approach is None and world_size == 1:
     from habana_frameworks.torch.core.quantization import _mark_params_as_const, _check_params_as_const
     _mark_params_as_const(user_model)
     _check_params_as_const(user_model)
     import habana_frameworks.torch.core as htcore
     htcore.hpu_initialize(user_model)
 
+if world_size > 1:
+    ds_model = deepspeed.init_inference(user_model,
+                                        mp_size=world_size,
+                                        dtype=model_dtype,
+                                        replace_with_kernel_inject=False)
+    user_model = ds_model.module
+
+# to channels last
+#user_model = user_model.to(memory_format=torch.channels_last)
 user_model.eval()
 
 if args.approach in ["dynamic", "static"]:
@@ -134,7 +158,7 @@ if args.approach in ["dynamic", "static"]:
                 )
 
         user_model = quantize(user_model, qconfig, calib_func=calib_func, inplace=True)
-    print(user_model)
+    print(user_model, flush=True)
 
 if args.to_graph:
     import habana_frameworks.torch.hpu.graphs as htgraphs
@@ -220,6 +244,7 @@ if args.accuracy:
             return [b for b in self.buckets if b >= length][0]
 
         def _model_call(self, inps):
+            #print(inps.shape)
             seq_length = inps.shape[-1]
             bucket_length = self.find_bucket(seq_length)
             padding_length = bucket_length - seq_length
@@ -253,6 +278,16 @@ if args.accuracy:
             results = lm_eval.evaluator.evaluate(lm, lm_tasks, limit=args.limit)
     else:
         results = lm_eval.evaluator.evaluate(lm, lm_tasks, limit=args.limit)
-    print(lm_eval.evaluator.make_table(results)) 
+    print(lm_eval.evaluator.make_table(results))
     eval_end = time.perf_counter()
     print("Duration:", eval_end - eval_start)
+    results['args'] = vars(args)
+    results['duration'] = eval_end - eval_start
+
+
+    dumped = json.dumps(results, indent=2)
+    for task_name in args.tasks:
+        if task_name == "wikitext":
+            print("Accuracy for %s is: %s" % (task_name, results["results"][task_name]["word_perplexity"]), flush=True)
+        else:
+            print("Accuracy for %s is: %s" % (task_name, results["results"][task_name]["acc"]), flush=True)

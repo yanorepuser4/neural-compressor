@@ -3,14 +3,20 @@ import copy
 import os
 from neural_compressor.torch.quantization.utils import set_module
 from ..modules import BatchMatmul, Matmul, Autocast
-from .modules import FP8Linear, FP8BatchMatmul, FP8Matmul, FP8Cast
+from .modules import FP8Linear, FP8BatchMatmul, FP8Matmul, FP8Cast, FP8LinearAllreduce, FP8LinearLayer #, FP8LmHeadLinearAllreduce
 
+from neural_compressor.torch.amp.modules.fp8_functions import fp8_matmul
+from deepspeed.module_inject import LinearAllreduce, LinearLayer#, LmHeadLinearAllreduce
 
 quantization_mapping = {
+    LinearAllreduce: FP8LinearAllreduce,
+    LinearLayer: FP8LinearLayer,
+    #LmHeadLinearAllreduce: FP8LmHeadLinearAllreduce,
     torch.nn.Linear: FP8Linear,
     BatchMatmul: FP8BatchMatmul,
     Matmul: FP8Matmul,
     Autocast: FP8Cast,
+    #torch.matmul: fp8_matmul
 }
 white_list = tuple(quantization_mapping.keys())
 
@@ -23,7 +29,7 @@ E5M2_AMAX = torch.tensor(57344*0.9, dtype=torch.float).to('hpu')
 def quantize_dynamic(model, dtype=torch.float8_e4m3fn, inplace=True):
 
     from neural_compressor.torch.quantization.fp8.modules import (
-        FP8DynamicLinear, 
+        FP8DynamicLinear,
         FP8DynamicMatmul,
         FP8DynamicBatchMatmul,
     )
@@ -78,6 +84,8 @@ def prepare(model, qconfig):
     return model
 
 def _remove_observer(model, qconfig):
+    import deepspeed.comm as dist
+    from torch.distributed import ReduceOp
     for name, module in model.named_modules():
         HF_max = E4M3_AMAX if qconfig.dtype == torch.float8_e4m3fn else E5M2_AMAX
         if hasattr(module, 'input_activation_post_process'):
@@ -87,6 +95,10 @@ def _remove_observer(model, qconfig):
                 min_val = module.input_activation_post_process.min_val
                 max_val = module.input_activation_post_process.max_val
             amax = torch.max(torch.abs(max_val), torch.abs(min_val))
+            if dist.is_initialized():
+                amax = amax.to('hpu')
+                dist.all_reduce(amax, op=ReduceOp.MAX)
+            print('rank', dist.get_rank() if dist.is_initialized() else -1, ':', name, ":", amax, flush=True)
             scale = HF_max / amax
             module.register_parameter('scale', torch.nn.Parameter(scale))
             delattr(module, 'input_activation_post_process')
@@ -97,6 +109,10 @@ def _remove_observer(model, qconfig):
                 min_val = module.input_activation_post_process1.min_val
                 max_val = module.input_activation_post_process1.max_val
             amax = torch.max(torch.abs(max_val), torch.abs(min_val))
+            if dist.is_initialized():
+                amax = amax.to('hpu')
+                dist.all_reduce(amax, op=ReduceOp.MAX)
+            print('rank', dist.get_rank() if dist.is_initialized() else -1, ':', name, ":", amax, flush=True)
             scale = HF_max / amax
             module.register_parameter('scale1', torch.nn.Parameter(scale))
             delattr(module, 'input_activation_post_process1')
@@ -116,8 +132,9 @@ def _replace_module(model, qconfig):
     for name, module in model.named_modules():
         if isinstance(module, white_list):
             QModule = quantization_mapping[type(module)]
-            module = QModule(module, qconfig.dtype)
-            set_module(model, name, module)
+            if QModule:
+                module = QModule(module, qconfig.dtype)
+                set_module(model, name, module)
 
 
 def convert(model, qconfig):
