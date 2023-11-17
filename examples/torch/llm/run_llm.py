@@ -28,6 +28,7 @@ parser.add_argument("--approach", type=str, default='static',
 parser.add_argument("--precision", type=str, default='fp8_e4m3', 
                     help="Select from ['fp8_e4m3', 'fp8_e5m2']")
 parser.add_argument("--accuracy", action="store_true")
+parser.add_argument("--generate", action="store_true")
 parser.add_argument("--batch_size", default=1, type=int,
                     help="For accuracy measurement only.")
 parser.add_argument("--pad_max_length", default=512, type=int,
@@ -40,6 +41,8 @@ parser.add_argument("--tasks", nargs='+', default=["wikitext"], type=str, \
                     help="tasks list for accuracy validation")
 parser.add_argument("--limit", default=None, type=int,
                     help="the sample num of evaluation.")
+parser.add_argument("--max_new_tokens", default=100, type=int,
+                    help="calibration iters.")
 parser.add_argument('--buckets', type=int, nargs='+', \
                     help="Input length buckets to use with static_shapes", default=[512])
 
@@ -124,6 +127,24 @@ if args.to_graph:
     import habana_frameworks.torch.hpu.graphs as htgraphs
     user_model = htgraphs.wrap_in_hpu_graph(user_model)
 
+if args.generate:
+    input_prompt = "DeepSpeed is a machine learning framework"
+    print("Prompt sentence:", input_prompt)
+    input_tokens = tokenizer(input_prompt, return_tensors="pt").to('hpu')
+    if args.approach == "cast":
+        from neural_compressor.torch.amp import autocast
+        from neural_compressor.torch.dtype import float8_e4m3, float8_e5m2
+        if args.precision == "fp8_e4m3":
+            dtype = float8_e4m3
+        else:
+            dtype = float8_e5m2
+        with autocast('hpu', dtype=dtype):
+            outputs = user_model.generate(**input_tokens, max_new_tokens=args.max_new_tokens)
+    else:
+        outputs = user_model.generate(**input_tokens, max_new_tokens=args.max_new_tokens)
+    output_sentence = tokenizer.batch_decode(outputs, skip_special_tokens=True)
+    print("Generated sentence:", output_sentence)
+
 if args.accuracy:
 
     class HabanaModelAdapter(lm_eval.base.BaseLM):
@@ -192,6 +213,16 @@ if args.accuracy:
     lm = HabanaModelAdapter(tokenizer, user_model, args, options)
 
     eval_start = time.perf_counter()
-    results = lm_eval.evaluator.evaluate(lm, lm_tasks)
+    if args.approach == "cast":
+        from neural_compressor.torch.amp import autocast
+        from neural_compressor.torch.dtype import float8_e4m3, float8_e5m2
+        if args.precision == "fp8_e4m3":
+            dtype = float8_e4m3
+        else:
+            dtype = float8_e5m2
+        with autocast('hpu', dtype=dtype):
+            results = lm_eval.evaluator.evaluate(lm, lm_tasks)
+    else:
+        results = lm_eval.evaluator.evaluate(lm, lm_tasks)
     eval_end = time.perf_counter()
     print("Duration:", eval_end - eval_start)
