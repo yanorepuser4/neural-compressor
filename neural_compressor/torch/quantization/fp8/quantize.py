@@ -2,14 +2,15 @@ import torch
 import copy
 import os
 from neural_compressor.torch.quantization.utils import set_module
-from ..modules import BatchMatmul, Matmul
-from .modules import FP8Linear, FP8BatchMatmul, FP8Matmul
+from ..modules import BatchMatmul, Matmul, Autocast
+from .modules import FP8Linear, FP8BatchMatmul, FP8Matmul, FP8Cast
 
 
 quantization_mapping = {
     torch.nn.Linear: FP8Linear,
     BatchMatmul: FP8BatchMatmul,
     Matmul: FP8Matmul,
+    Autocast: FP8Cast,
 }
 white_list = tuple(quantization_mapping.keys())
 
@@ -20,11 +21,23 @@ E5M2_AMAX = torch.tensor(57344*0.9, dtype=torch.float).to('hpu')
 
 
 def quantize_dynamic(model, dtype=torch.float8_e4m3fn, inplace=True):
+
+    from neural_compressor.torch.quantization.fp8.modules import (
+        FP8DynamicLinear, 
+        FP8DynamicMatmul,
+        FP8DynamicBatchMatmul,
+    )
     q_model = model if inplace else copy.deepcopy(model)
     from neural_compressor.torch.quantization.fp8.modules import FP8DynamicLinear
     for n, m in q_model.named_modules():
         if isinstance(m, torch.nn.Linear):
-            new_m = FP8DynamicLinear(m, dtype, use_amax=True)
+            new_m = FP8DynamicLinear(m, dtype) # need m for init
+            set_module(q_model, n, new_m)
+        elif isinstance(m, Matmul):
+            new_m = FP8DynamicMatmul(dtype)
+            set_module(q_model, n, new_m)
+        elif isinstance(m, Matmul):
+            new_m = FP8DynamicBatchMatmul(dtype)
             set_module(q_model, n, new_m)
     return q_model
 
@@ -97,7 +110,6 @@ def _remove_observer(model, qconfig):
 
 
 def _replace_module(model, qconfig):
-    from neural_compressor.torch.quantization.fp8.modules import FP8Linear
     for name, module in model.named_modules():
         if isinstance(module, white_list):
             QModule = quantization_mapping[type(module)]

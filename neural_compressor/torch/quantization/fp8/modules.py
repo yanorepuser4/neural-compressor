@@ -9,11 +9,11 @@ E4M3_AMAX = torch.tensor(240*0.9, dtype=torch.float).to('hpu')
 E5M2_AMAX = torch.tensor(57344*0.9, dtype=torch.float).to('hpu')
 
 class FP8DynamicLinear(torch.nn.Module):
-    def __init__(self, org_module, dtype=torch.float8_e4m3fn, use_amax=True) -> None:
+    def __init__(self, org_module, dtype=torch.float8_e4m3fn) -> None:
         super().__init__()
         # attributes
         org_module.to('hpu')
-        self.use_amax = use_amax
+        self.use_amax = True
         self.dtype = dtype
         self.dtype_amax = E4M3_AMAX if self.dtype == torch.float8_e4m3fn else E5M2_AMAX
         self.in_features = org_module.in_features
@@ -55,17 +55,18 @@ class FP8DynamicLinear(torch.nn.Module):
             self.bias = None
 
     def forward(self, inp):
-        if self.use_amax:
-            input_scale = self.dtype_amax / inp.abs().max()
-            input_scale_inv = torch.reciprocal(input_scale)
-        else:
-            input_scale = None
-            input_scale_inv = None
-
         assert inp.shape[-1] == self.in_features, "GEMM not possible"
         org_middle_shape = inp.shape[1:-1]
         inp = inp.view((-1, self.in_features))
-        inp = torch.ops.hpu.cast_to_fp8_v2(inp, input_scale, False, False, self.dtype)[0]
+        if inp.dtype not in [torch.float8_e4m3fn, torch.float8_e5m2]:
+            if self.use_amax:
+                input_scale = self.dtype_amax / inp.abs().max()
+                input_scale_inv = torch.reciprocal(input_scale)
+            else:
+                input_scale, input_scale_inv= None, None
+            inp = torch.ops.hpu.cast_to_fp8_v2(inp, input_scale, False, False, self.dtype)[0]
+        else:
+            input_scale_inv = None
         out = torch.ops.hpu.fp8_gemm_v2(
             inp,
             False,
@@ -85,6 +86,62 @@ class FP8DynamicLinear(torch.nn.Module):
             self.in_features, self.out_features, self.bias is not None, self.dtype,
         )
 
+class FP8DynamicMatmul(torch.nn.Module):
+    def __init__(self, dtype) -> None:
+        super().__init__()
+        self.dtype = dtype
+        self.use_amax = True
+        self.dtype_amax = E4M3_AMAX if self.dtype == torch.float8_e4m3fn else E5M2_AMAX
+        self.out_dtype = torch.float32
+
+    def forward(self, input1, input2):
+        dim1 = input1.shape[-1]
+        dim2 = input2.shape[-2]
+        assert dim1 == dim2, "GEMM not possible"
+
+        # process input1
+        if input1.dtype not in [torch.float8_e4m3fn, torch.float8_e5m2]:
+            if self.use_amax:
+                input1_scale = self.dtype_amax / input1.data.abs().max()
+                input1_scale_inv = torch.reciprocal(input1_scale)
+            else:
+                input1_scale, input1_scale_inv = None, None
+            input1 = torch.ops.hpu.cast_to_fp8_v2(input1, input1_scale, False, False, self.dtype)[0]
+        else:
+            # skip cast for input1
+            input1_scale, input1_scale_inv = None, None
+        # process input2
+        if input2.dtype not in [torch.float8_e4m3fn, torch.float8_e5m2]:
+            if self.use_amax:
+                input2_scale = self.dtype_amax / input2.data.abs().max()
+                input2_scale_inv = torch.reciprocal(input2_scale)
+            else:
+                input2_scale, input2_scale_inv = None, None
+            input2 = torch.ops.hpu.cast_to_fp8_v2(input2, input2_scale, False, False, self.dtype)[0]
+        else:
+            # skip cast for input2
+            input2_scale, input2_scale_inv = None, None
+        # calculate
+        out = torch.ops.hpu.fp8_gemm_v2(
+            input1,
+            False,
+            input2,
+            False,
+            None,
+            self.out_dtype,
+            input1_scale_inv, # inv is used for recover scale
+            input2_scale_inv,
+            None,
+            False,
+        )
+        return out
+
+    def extra_repr(self) -> str:
+        return 'format={}'.format(self.dtype)
+
+
+class FP8DynamicBatchMatmul(FP8DynamicMatmul):
+    pass
 
 
 class FP8Linear(torch.nn.Module):
@@ -195,8 +252,14 @@ class FP8Matmul(torch.nn.Module):
         dim2 = input2.shape[-2]
         assert dim1 == dim2, "GEMM not possible"
 
-        input1 = torch.ops.hpu.cast_to_fp8_v2(input1, self.scale, False, False, self.dtype)[0]
-        input2 = torch.ops.hpu.cast_to_fp8_v2(input2, self.scale1, False, False, self.dtype)[0]
+        if input1.dtype not in [torch.float8_e4m3fn, torch.float8_e5m2]:
+            input1 = torch.ops.hpu.cast_to_fp8_v2(input1, self.scale, False, False, self.dtype)[0]
+        else:
+            self.input1_scale_inv = None
+        if input2.dtype not in [torch.float8_e4m3fn, torch.float8_e5m2]:
+            input2 = torch.ops.hpu.cast_to_fp8_v2(input2, self.scale1, False, False, self.dtype)[0]
+        else:
+            self.input2_scale_inv = None
         out = torch.ops.hpu.fp8_gemm_v2(
             input1,
             False,
@@ -219,4 +282,36 @@ class FP8Matmul(torch.nn.Module):
 
 class FP8BatchMatmul(FP8Matmul):
     pass
+
+
+
+class FP8Cast(torch.nn.Module):
+    def __init__(self, org_module, dtype) -> None:
+        super().__init__()
+        org_module.to('hpu')
+        self.dtype = dtype
+        self.dtype_amax = E4M3_AMAX if self.dtype == torch.float8_e4m3fn else E5M2_AMAX
+        self.out_dtype = torch.float32
+        assert hasattr(org_module, "scale"), "scale is not recorded when convert to FP8Cast."
+        self.register_buffer(
+            'scale', 
+            torch.tensor(
+                org_module.scale,
+                device="hpu",
+                dtype=self.out_dtype,
+            ) 
+        )
+        self.scale = None # due to next matmul doesn't know this scale
+
+    def forward(self, input):
+        if input.dtype not in [torch.float8_e4m3fn, torch.float8_e5m2]:
+            out = torch.ops.hpu.cast_to_fp8_v2(input, self.scale, False, False, self.dtype)[0]
+        else:
+            out = input
+        return out
+
+    def extra_repr(self) -> str:
+        return 'scales={}, format={}'.format(
+            (self.scale), self.dtype,
+        )
 
