@@ -47,7 +47,8 @@ from transformers.models.llama.configuration_llama import LlamaConfig
 if is_flash_attn_2_available():
     from flash_attn import flash_attn_func, flash_attn_varlen_func
     from flash_attn.bert_padding import index_first_axis, pad_input, unpad_input  # noqa
-
+### INC code ###
+from neural_compressor.torch.quantization import Matmul, BatchMatmul, Autocast
 
 # This makes `_prepare_4d_causal_attention_mask` a leaf function in the FX graph.
 # It means that the function will not be traced through and simply appear as a node in the graph.
@@ -299,6 +300,11 @@ class LlamaAttention(nn.Module):
         self.v_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=config.attention_bias)
         self.o_proj = nn.Linear(self.num_heads * self.head_dim, self.hidden_size, bias=config.attention_bias)
         self._init_rope()
+        ### INC code ###
+        self.matmul1 = Matmul()
+        self.matmul2 = Matmul()
+        self.cast1 = Autocast()
+        self.cast2 = Autocast()
 
     def _init_rope(self):
         if self.config.rope_scaling is None:
@@ -379,12 +385,12 @@ class LlamaAttention(nn.Module):
         cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
 
-        ### INC code change begin ###
-        key_states = torch.ops.hpu.cast_to_fp8_v2(key_states, None, False, False, torch.float8_e4m3fn)[0]
-        value_states = torch.ops.hpu.cast_to_fp8_v2(value_states, None, False, False, torch.float8_e4m3fn)[0]
+        ### INC code ###
+        key_states = self.cast1(key_states)
+        value_states = self.cast2(value_states)
         import habana_frameworks.torch.core as htcore
         htcore.mark_step()
-        ### INC code change end ###
+
         if past_key_value is not None:
             # reuse k, v, self_attention
             key_states = torch.cat([past_key_value[0], key_states], dim=2)
@@ -395,7 +401,8 @@ class LlamaAttention(nn.Module):
         key_states = repeat_kv(key_states, self.num_key_value_groups)
         value_states = repeat_kv(value_states, self.num_key_value_groups)
 
-        attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
+        ### INC code ###
+        attn_weights = self.matmul1(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
 
         if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
             raise ValueError(
@@ -413,7 +420,9 @@ class LlamaAttention(nn.Module):
         # upcast attention to fp32
         attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
         attn_weights = nn.functional.dropout(attn_weights, p=self.attention_dropout, training=self.training)
-        attn_output = torch.matmul(attn_weights, value_states)
+
+        ### INC code ###
+        attn_output = self.matmul2(attn_weights, value_states)
 
         if attn_output.size() != (bsz, self.num_heads, q_len, self.head_dim):
             raise ValueError(

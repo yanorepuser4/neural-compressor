@@ -35,7 +35,7 @@ parser.add_argument("--pad_max_length", default=512, type=int,
                     help="Pad input ids to max length.")
 parser.add_argument("--calib_iters", default=100, type=int,
                     help="calibration iters.")
-parser.add_argument("--tasks", nargs='+', default=["wikitext"], type=str, \
+parser.add_argument("--tasks", nargs='+', default=["lambada_openai"], type=str, \
                     choices=["winogrande", "copa", "piqa", "rte", "hellaswag", \
                     "openbookqa", "lambada_openai", "lambada_standard", "wikitext"],
                     help="tasks list for accuracy validation")
@@ -123,6 +123,7 @@ if args.approach in ["dynamic", "static"]:
                 )
 
         user_model = quantize(user_model, qconfig, calib_func=calib_func, inplace=True)
+    print(user_model)
 
 if args.to_graph:
     import habana_frameworks.torch.hpu.graphs as htgraphs
@@ -131,6 +132,10 @@ if args.to_graph:
 if args.generate:
     input_prompt = "DeepSpeed is a machine learning framework"
     print("Prompt sentence:", input_prompt)
+    generation_config = {
+        "min_new_tokens": args.max_new_tokens, "max_new_tokens": args.max_new_tokens,
+        # "do_sample": False, "temperature": 0.9, "num_beams": 4,
+    }
     input_tokens = tokenizer(input_prompt, return_tensors="pt").to('hpu')
     eval_start = time.perf_counter()
     if args.approach == "cast":
@@ -138,12 +143,17 @@ if args.generate:
         from neural_compressor.torch.dtype import float8_e4m3, float8_e5m2
         if args.precision == "fp8_e4m3":
             dtype = float8_e4m3
-        else:
+        elif args.precision == "fp8_e5m2":
             dtype = float8_e5m2
+        elif args.precision == "fp16":
+            dtype = torch.float16
+        elif args.precision == "bf16":
+            dtype = torch.bfloat16
         with autocast('hpu', dtype=dtype):
-            outputs = user_model.generate(**input_tokens, max_new_tokens=args.max_new_tokens)
+            outputs = user_model.generate(**input_tokens, **generation_config)
     else:
-        outputs = user_model.generate(**input_tokens, max_new_tokens=args.max_new_tokens)
+        outputs = user_model.generate(**input_tokens, **generation_config)
+
     output_sentence = tokenizer.batch_decode(outputs, skip_special_tokens=True)
     eval_end = time.perf_counter()
     print("Generated sentence:", output_sentence)
@@ -204,7 +214,6 @@ if args.accuracy:
             if True:
                 import torch.nn.functional as F
                 inps = F.pad(inps, (0, padding_length), value=self.model.config.pad_token_id)
-            print(inps.shape)
 
             logits = self.model(inps.to(self._device))['logits'].cpu()
             if True and padding_length > 0:
@@ -225,8 +234,8 @@ if args.accuracy:
         else:
             dtype = float8_e5m2
         with autocast('hpu', dtype=dtype):
-            results = lm_eval.evaluator.evaluate(lm, lm_tasks)
+            results = lm_eval.evaluator.evaluate(lm, lm_tasks, limit=args.limit)
     else:
-        results = lm_eval.evaluator.evaluate(lm, lm_tasks)
+        results = lm_eval.evaluator.evaluate(lm, lm_tasks, limit=args.limit)
     eval_end = time.perf_counter()
     print("Duration:", eval_end - eval_start)
