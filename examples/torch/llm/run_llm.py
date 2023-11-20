@@ -45,7 +45,7 @@ parser.add_argument("--limit", default=None, type=int,
 parser.add_argument("--max_new_tokens", default=100, type=int,
                     help="calibration iters.")
 parser.add_argument('--buckets', type=int, nargs='+', \
-                    help="Input length buckets to use with static_shapes", default=[512])
+                    help="Input length buckets to use with static_shapes", default=[129])
 
 args = parser.parse_args()
 
@@ -208,6 +208,7 @@ if args.accuracy:
             return [b for b in self.buckets if b >= length][0]
 
         def _model_call(self, inps):
+            print(inps.shape[-1])
             seq_length = inps.shape[-1]
             bucket_length = self.find_bucket(seq_length)
             padding_length = bucket_length - seq_length
@@ -231,8 +232,12 @@ if args.accuracy:
         from neural_compressor.torch.dtype import float8_e4m3, float8_e5m2
         if args.precision == "fp8_e4m3":
             dtype = float8_e4m3
-        else:
+        elif args.precision == "fp8_e5m2":
             dtype = float8_e5m2
+        elif args.precision == "fp16":
+            dtype = torch.float16
+        elif args.precision == "bf16":
+            dtype = torch.bfloat16
         with autocast('hpu', dtype=dtype):
             results = lm_eval.evaluator.evaluate(lm, lm_tasks, limit=args.limit)
     else:
