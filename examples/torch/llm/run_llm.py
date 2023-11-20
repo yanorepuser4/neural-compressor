@@ -58,24 +58,6 @@ if re.search("llama", args.model.lower()):
         device_map='hpu',
     )
     tokenizer = AutoTokenizer.from_pretrained(args.model)
-elif re.search("mpt-7b-chat", args.model.lower()):
-    user_model = transformers.MPTForCausalLM.from_pretrained(
-        args.model,
-        trust_remote_code=args.trust_remote_code,
-        revision=args.revision,
-        device_map='hpu',
-    )
-    tokenizer = AutoTokenizer.from_pretrained(args.model)
-    user_model.config.use_cache = True
-elif re.search("falcon-7b-instruct", args.model.lower()):
-    user_model = transformers.RWForCausalLM.from_pretrained(
-        args.model,
-        trust_remote_code=args.trust_remote_code,
-        revision=args.revision,
-        device_map='hpu',
-    )
-    tokenizer = AutoTokenizer.from_pretrained(args.model)
-    user_model.config.use_cache = True
 else:
     user_model = AutoModelForCausalLM.from_pretrained(
         args.model,
@@ -83,7 +65,10 @@ else:
         revision=args.revision,
         device_map='hpu',
     )
-    tokenizer = AutoTokenizer.from_pretrained(args.model)
+    tokenizer = AutoTokenizer.from_pretrained(
+        args.model, 
+        trust_remote_code=args.trust_remote_code
+    )
 
 # to channels last
 user_model = user_model.to(memory_format=torch.channels_last)
@@ -166,11 +151,12 @@ if args.accuracy:
         def __init__(self, tokenizer, model, args, options):
             super().__init__()
             self.tokenizer = tokenizer
-            self.model = model
+            self.model = model.eval()
             self._batch_size = args.batch_size
             self.buckets = list(sorted(args.buckets))
             self.options = options
             self._device = "hpu"
+            torch.set_grad_enabled(False)
 
         @property
         def eot_token_id(self):
@@ -192,7 +178,7 @@ if args.accuracy:
         def device(self):
             # We need to do padding ourselves, otherwise we'll end up with recompilations
             # Returning 'cpu' to keep tensors on CPU in lm_eval code
-            return 'cpu'
+            return 'hpu'
 
         def tok_encode(self, string):
             string = string.strip() # A space exists at the begining of label
@@ -208,7 +194,6 @@ if args.accuracy:
             return [b for b in self.buckets if b >= length][0]
 
         def _model_call(self, inps):
-            print(inps.shape[-1])
             seq_length = inps.shape[-1]
             bucket_length = self.find_bucket(seq_length)
             padding_length = bucket_length - seq_length
@@ -216,7 +201,7 @@ if args.accuracy:
                 import torch.nn.functional as F
                 inps = F.pad(inps, (0, padding_length), value=self.model.config.pad_token_id)
 
-            logits = self.model(inps.to(self._device))['logits'].cpu()
+            logits = self.model(inps.to(self._device))['logits']
             if True and padding_length > 0:
                 logits = logits[:, :-padding_length, :]
             logits = logits.to(torch.float32)
