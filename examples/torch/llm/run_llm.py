@@ -23,10 +23,11 @@ parser.add_argument(
 parser.add_argument("--dataset", nargs="?", default="NeelNanda/pile-10k", const="NeelNanda/pile-10k")
 parser.add_argument("--output_dir", nargs="?", default="./saved_results")
 parser.add_argument("--to_graph", action="store_true")
-parser.add_argument("--approach", type=str, default='static', 
+parser.add_argument("--approach", type=str, default=None, 
                     help="Select from ['dynamic', 'static' 'cast']")
 parser.add_argument("--precision", type=str, default='fp8_e4m3', 
-                    help="Select from ['fp8_e4m3', 'fp8_e5m2']")
+                    help="Select from ['fp8_e4m3', 'fp8_e5m2', 'bf16', 'fp16'], \
+                        ['bf16', 'fp16'] only work with cast approach")
 parser.add_argument("--accuracy", action="store_true")
 parser.add_argument("--generate", action="store_true")
 parser.add_argument("--batch_size", default=1, type=int,
@@ -194,7 +195,8 @@ if args.accuracy:
             return 'cpu'
 
         def tok_encode(self, string):
-            return self.tokenizer.encode(string)
+            string = string.strip() # A space exists at the begining of label
+            return self.tokenizer.encode(string, add_special_tokens=False)
 
         def tok_decode(self, tokens):
             return self.tokenizer.decode(tokens)
@@ -206,8 +208,6 @@ if args.accuracy:
             return [b for b in self.buckets if b >= length][0]
 
         def _model_call(self, inps):
-            print(inps.shape)
-
             seq_length = inps.shape[-1]
             bucket_length = self.find_bucket(seq_length)
             padding_length = bucket_length - seq_length
@@ -237,5 +237,6 @@ if args.accuracy:
             results = lm_eval.evaluator.evaluate(lm, lm_tasks, limit=args.limit)
     else:
         results = lm_eval.evaluator.evaluate(lm, lm_tasks, limit=args.limit)
+    print(lm_eval.evaluator.make_table(results)) 
     eval_end = time.perf_counter()
     print("Duration:", eval_end - eval_start)
