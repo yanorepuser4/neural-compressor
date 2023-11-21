@@ -30,6 +30,7 @@ parser.add_argument("--precision", type=str, default='fp8_e4m3',
                     help="Select from ['fp8_e4m3', 'fp8_e5m2', 'bf16', 'fp16'], \
                         ['bf16', 'fp16'] only work with cast approach")
 parser.add_argument("--accuracy", action="store_true")
+parser.add_argument("--performance", action="store_true")
 parser.add_argument("--generate", action="store_true")
 parser.add_argument("--batch_size", default=1, type=int,
                     help="For accuracy measurement only.")
@@ -193,6 +194,14 @@ if args.generate:
     eval_end = time.perf_counter()
     print("Generated sentence:", output_sentence)
     print("Duration:", eval_end - eval_start)
+
+if args.performance:
+    eval_start = time.perf_counter()
+    input_prompt = "Intel is a company which"
+    input_tokens = torch.ones((1, 128), dtype=torch.long).to('hpu')
+    generation_config = {"min_new_tokens": 100, "max_new_tokens": 100}
+    outputs = user_model.generate(input_tokens, **generation_config)
+    print("Duration of generating 100 tokens :", time.perf_counter() - eval_start)
 
 if args.accuracy:
 
