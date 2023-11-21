@@ -8,6 +8,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 import habana_frameworks.torch.hpex
 import lm_eval.tasks
 import lm_eval.evaluator
+torch.set_grad_enabled(False)
 
 
 parser = argparse.ArgumentParser()
@@ -50,14 +51,25 @@ parser.add_argument('--buckets', type=int, nargs='+', \
 args = parser.parse_args()
 
 
+if args.approach is None:
+    import habana_frameworks.torch.core as htcore
+    htcore.hpu_set_env()
+
+# model
 if re.search("llama", args.model.lower()):
-    from modeling_llama import LlamaForCausalLM
+    from models.modeling_llama import LlamaForCausalLM
     user_model = LlamaForCausalLM.from_pretrained(
         args.model,
         revision=args.revision,
         device_map='hpu',
     )
-    tokenizer = AutoTokenizer.from_pretrained(args.model)
+elif re.search("chatglm", args.model.lower()):
+    from models.modeling_chatglm import ChatGLMForConditionalGeneration
+    user_model = ChatGLMForConditionalGeneration.from_pretrained(
+        args.model,
+        revision=args.revision,
+        device_map='hpu',
+    )
 else:
     user_model = AutoModelForCausalLM.from_pretrained(
         args.model,
@@ -65,13 +77,26 @@ else:
         revision=args.revision,
         device_map='hpu',
     )
+# tokenizer
+if re.search("baichuan", args.model.lower()):
+    from models.tokenization_baichuan import BaichuanTokenizer
+    tokenizer = BaichuanTokenizer.from_pretrained(
+        args.model, 
+        trust_remote_code=args.trust_remote_code
+    )
+else:
     tokenizer = AutoTokenizer.from_pretrained(
         args.model, 
         trust_remote_code=args.trust_remote_code
     )
 
-# to channels last
-user_model = user_model.to(memory_format=torch.channels_last)
+if args.approach is None:
+    from habana_frameworks.torch.core.quantization import _mark_params_as_const, _check_params_as_const
+    _mark_params_as_const(user_model)
+    _check_params_as_const(user_model)
+    import habana_frameworks.torch.core as htcore
+    htcore.hpu_initialize(user_model)
+
 user_model.eval()
 
 if args.approach in ["dynamic", "static"]:
@@ -104,8 +129,8 @@ if args.approach in ["dynamic", "static"]:
                 if i >= args.calib_iters:
                     break
                 model(
-                    input_ids=calib_input["input_ids"],
-                    attention_mask=calib_input["attention_mask"],
+                    input_ids=calib_input["input_ids"].to('hpu'),
+                    attention_mask=calib_input["attention_mask"].to('hpu'),
                 )
 
         user_model = quantize(user_model, qconfig, calib_func=calib_func, inplace=True)
@@ -181,11 +206,12 @@ if args.accuracy:
             return 'hpu'
 
         def tok_encode(self, string):
-            string = string.strip() # A space exists at the begining of label
+            if re.search("chatglm3", args.model.lower()) or re.search("llama", args.model.lower()) :
+                string = string.lstrip()
             return self.tokenizer.encode(string, add_special_tokens=False)
 
         def tok_decode(self, tokens):
-            return self.tokenizer.decode(tokens)
+            return self.tokenizer.decode(tokens, skip_special_tokens=True)
 
         def _model_generate(self, context, max_length, eos_token_id):
             raise NotImplementedError()

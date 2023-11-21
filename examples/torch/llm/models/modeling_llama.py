@@ -388,8 +388,8 @@ class LlamaAttention(nn.Module):
         ### INC code ###
         key_states = self.cast1(key_states)
         value_states = self.cast2(value_states)
-        import habana_frameworks.torch.core as htcore
-        htcore.mark_step()
+        # import habana_frameworks.torch.core as htcore
+        # htcore.mark_step()
 
         if past_key_value is not None:
             # reuse k, v, self_attention
