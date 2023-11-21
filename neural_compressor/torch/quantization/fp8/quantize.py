@@ -39,6 +39,9 @@ def quantize_dynamic(model, dtype=torch.float8_e4m3fn, inplace=True):
         elif isinstance(m, Matmul):
             new_m = FP8DynamicBatchMatmul(dtype)
             set_module(q_model, n, new_m)
+        elif isinstance(m, Autocast):
+            new_m = FP8Cast(dtype=dtype)
+            set_module(q_model, n, new_m)
     return q_model
 
 

@@ -1,12 +1,15 @@
 import os
 import torch
 import habana_frameworks.torch.hpex
+import habana_frameworks.torch.core as htcore
 from torch.nn import functional as F
 from neural_compressor.common import logger
+
 
 # without scale factor 0.9, the output will be abnormal.
 E4M3_AMAX = torch.tensor(240*0.9, dtype=torch.float).to('hpu')
 E5M2_AMAX = torch.tensor(57344*0.9, dtype=torch.float).to('hpu')
+
 
 class FP8DynamicLinear(torch.nn.Module):
     def __init__(self, org_module, dtype=torch.float8_e4m3fn) -> None:
@@ -79,7 +82,9 @@ class FP8DynamicLinear(torch.nn.Module):
             self.bias,
             False,
         )
-        return out.view(-1, *org_middle_shape, out.shape[-1])
+        out = out.view(-1, *org_middle_shape, out.shape[-1])
+        htcore.mark_step()
+        return out
 
     def extra_repr(self) -> str:
         return 'in_features={}, out_features={}, bias={}, format={}'.format(
@@ -134,6 +139,7 @@ class FP8DynamicMatmul(torch.nn.Module):
             None,
             False,
         )
+        htcore.mark_step()
         return out
 
     def extra_repr(self) -> str:
@@ -211,7 +217,9 @@ class FP8Linear(torch.nn.Module):
             self.bias,
             False,
         )
-        return out.view(-1, *org_middle_shape, out.shape[-1])
+        out = out.view(-1, *org_middle_shape, out.shape[-1])
+        htcore.mark_step()
+        return out
 
     def extra_repr(self) -> str:
         return 'in_features={}, out_features={}, bias={}, scale={}, format={}'.format(
@@ -272,6 +280,7 @@ class FP8Matmul(torch.nn.Module):
             None,
             False,
         )
+        htcore.mark_step()
         return out
 
     def extra_repr(self) -> str:
@@ -286,28 +295,31 @@ class FP8BatchMatmul(FP8Matmul):
 
 
 class FP8Cast(torch.nn.Module):
-    def __init__(self, org_module, dtype) -> None:
+    def __init__(self, org_module=None, dtype=torch.float8_e4m3fn) -> None:
         super().__init__()
-        org_module.to('hpu')
+        self.out_dtype = torch.float32
         self.dtype = dtype
         self.dtype_amax = E4M3_AMAX if self.dtype == torch.float8_e4m3fn else E5M2_AMAX
-        self.out_dtype = torch.float32
-        assert hasattr(org_module, "scale"), "scale is not recorded when convert to FP8Cast."
-        self.register_buffer(
-            'scale', 
-            torch.tensor(
-                org_module.scale,
-                device="hpu",
-                dtype=self.out_dtype,
-            ) 
-        )
-        self.scale = None # due to next matmul doesn't know this scale
+        if org_module is not None:
+            org_module.to('hpu')
+            assert hasattr(org_module, "scale"), "scale is not recorded when convert to FP8Cast."
+            self.register_buffer(
+                'scale', 
+                torch.tensor(
+                    org_module.scale,
+                    device="hpu",
+                    dtype=self.out_dtype,
+                ) 
+            )
+        else:
+            self.scale = None # due to next matmul doesn't know this scale
 
     def forward(self, input):
         if input.dtype not in [torch.float8_e4m3fn, torch.float8_e5m2]:
             out = torch.ops.hpu.cast_to_fp8_v2(input, self.scale, False, False, self.dtype)[0]
         else:
             out = input
+        htcore.mark_step()
         return out
 
     def extra_repr(self) -> str:

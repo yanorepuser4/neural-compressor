@@ -1,6 +1,7 @@
 import os
 import torch
 import habana_frameworks.torch.hpex
+import habana_frameworks.torch.core as htcore
 from torch.nn import functional as F
 from neural_compressor.common import logger
 
@@ -57,7 +58,9 @@ def fp8_linear_forward(input, weight, bias):
         bias,
         False,
     )
-    return out.view(-1, *org_middle_shape, out.shape[-1])
+    out = out.view(-1, *org_middle_shape, out.shape[-1])
+    htcore.mark_step()
+    return out
 
 
 def fp8_matmul(input1, input2):
@@ -97,6 +100,7 @@ def fp8_matmul(input1, input2):
         None,
         False,
     )
+    htcore.mark_step()
     return out
 
 
