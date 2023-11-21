@@ -311,8 +311,9 @@ class FP8Cast(torch.nn.Module):
                     dtype=self.out_dtype,
                 ) 
             )
-        else:
             self.scale = None # due to next matmul doesn't know this scale
+        else:
+            self.scale = None
 
     def forward(self, input):
         if input.dtype not in [torch.float8_e4m3fn, torch.float8_e5m2]:
