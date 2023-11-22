@@ -73,6 +73,7 @@ args = parser.parse_args()
 
 
 world_size = int(os.getenv('WORLD_SIZE', '1'))
+local_rank = int(os.getenv('LOCAL_RANK', '-1'))
 
 # model
 if re.search("llama", args.model.lower()) or re.search("bloom", args.model.lower()):
@@ -84,6 +85,15 @@ if re.search("llama", args.model.lower()) or re.search("bloom", args.model.lower
         deepspeed.init_distributed(dist_backend="hccl")
         with deepspeed.OnDevice(dtype=model_dtype, device="meta"):
             user_model = AutoModelForCausalLM.from_config(config, torch_dtype=model_dtype)
+        import tempfile
+        checkpoints_json = tempfile.NamedTemporaryFile(suffix=".json", mode="+w")
+        from utils import write_checkpoints_json
+        write_checkpoints_json(
+             args.model,
+             local_rank,
+             checkpoints_json,
+             token=None,
+        )
     else:
         model_dtype = torch.float16
         user_model = AutoModelForCausalLM.from_pretrained(
@@ -120,7 +130,17 @@ else:
     )
 
 if world_size > 1:
-    ds_model = deepspeed.init_inference(user_model,
+    if re.search("llama", args.model.lower()):
+        ds_inference_kwargs = {"dtype": model_dtype}
+        ds_inference_kwargs["tensor_parallel"] = {"tp_size": world_size}
+        ds_inference_kwargs["enable_cuda_graph"] = False
+        from transformers.models.llama.modeling_llama import LlamaDecoderLayer
+        ds_inference_kwargs["injection_policy"] = {LlamaDecoderLayer: ("self_attn.o_proj", "mlp.down_proj")}
+        ds_inference_kwargs["checkpoint"] = checkpoints_json.name
+
+        ds_model = deepspeed.init_inference(user_model, **ds_inference_kwargs)
+    else:
+        ds_model = deepspeed.init_inference(user_model,
                                         mp_size=world_size,
                                         dtype=model_dtype,
                                         replace_with_kernel_inject=False)
@@ -240,7 +260,7 @@ if args.accuracy:
         def device(self):
             # We need to do padding ourselves, otherwise we'll end up with recompilations
             # Returning 'cpu' to keep tensors on CPU in lm_eval code
-            return 'hpu'
+            return 'cpu' # 'hpu'
 
         def tok_encode(self, string):
             if re.search("chatglm3", args.model.lower()) or re.search("llama", args.model.lower()) :

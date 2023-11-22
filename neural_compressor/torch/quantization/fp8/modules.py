@@ -469,6 +469,7 @@ class FP8LinearAllreduce(torch.nn.Module):
             False,
         )
         from deepspeed import comm as dist
+        htcore.mark_step()
         if self.mp_group is not None:
             dist.inference_all_reduce(out, group=self.mp_group)
         if self.bias is not None:
@@ -534,13 +535,15 @@ class FP8LmHeadLinearAllreduce(torch.nn.Module):
         self.world_size = org_module.world_size
 
     def forward(self, inp):
-        assert inp.shape[-1] == self.in_features, "GEMM not possible"
+        #from deepspeed.module_inject.tp_shard import get_shard_size, get_shard_size_list
+        #input_shard_size = get_shard_size(inp.shape[-1], self.world_size)
+        #input_shard_offset = sum(get_shard_size_list(inp.shape[-1], self.world_size)[0:self.rank])
 
-        from deepspeed.module_inject.tp_shard import get_shard_size, get_shard_size_list
-        input_shard_size = get_shard_size(inp.shape[-1], self.world_size)
-        input_shard_offset = sum(get_shard_size_list(inp.shape[-1], self.world_size)[0:self.rank])
-
-        inputmat = inp[:, :, input_shard_offset:input_shard_offset + input_shard_size]
+        #inputmat = inp[:, :, input_shard_offset:input_shard_offset + input_shard_size]
+        assert inp.shape[
+             -1] % self.world_size == 0, 'Please ensure that self.world_size is divisible by input.shape[-1]'
+        input_shard = inp.shape[-1] // self.world_size
+        inputmat = inp[:, :, self.rank * input_shard:(self.rank + 1) * input_shard]
         inputmat = torch.ops.hpu.cast_to_fp8_v2(inputmat, self.scale, False, False, self.dtype)[0]
         out = torch.ops.hpu.fp8_gemm_v2(
             inputmat,
@@ -555,8 +558,9 @@ class FP8LmHeadLinearAllreduce(torch.nn.Module):
             False,
         )
         from deepspeed import comm as dist
+        htcore.mark_step()
         if self.mp_group is not None:
-            dist.inference_all_reduce(out, group=org_module.mp_group)
+            dist.inference_all_reduce(out, group=self.mp_group)
         if self.bias is not None:
             out += self.bias
         return out.view(-1, *inp.shape[1:-1], out.shape[-1])

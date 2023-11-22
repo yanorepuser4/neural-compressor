@@ -3,15 +3,16 @@ import copy
 import os
 from neural_compressor.torch.quantization.utils import set_module
 from ..modules import BatchMatmul, Matmul, Autocast
-from .modules import FP8Linear, FP8BatchMatmul, FP8Matmul, FP8Cast, FP8LinearAllreduce, FP8LinearLayer #, FP8LmHeadLinearAllreduce
+from .modules import FP8Linear, FP8BatchMatmul, FP8Matmul, FP8Cast, FP8LinearAllreduce, FP8LinearLayer , FP8LmHeadLinearAllreduce
 
 from neural_compressor.torch.amp.modules.fp8_functions import fp8_matmul
-from deepspeed.module_inject import LinearAllreduce, LinearLayer#, LmHeadLinearAllreduce
+from deepspeed.module_inject import LinearAllreduce, LinearLayer
+from deepspeed.module_inject.layers import LmHeadLinearAllreduce
 
 quantization_mapping = {
     LinearAllreduce: FP8LinearAllreduce,
     LinearLayer: FP8LinearLayer,
-    #LmHeadLinearAllreduce: FP8LmHeadLinearAllreduce,
+    LmHeadLinearAllreduce: FP8LmHeadLinearAllreduce,
     torch.nn.Linear: FP8Linear,
     BatchMatmul: FP8BatchMatmul,
     Matmul: FP8Matmul,
