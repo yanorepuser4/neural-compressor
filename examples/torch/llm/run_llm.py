@@ -75,6 +75,10 @@ args = parser.parse_args()
 world_size = int(os.getenv('WORLD_SIZE', '1'))
 local_rank = int(os.getenv('LOCAL_RANK', '-1'))
 
+#if local_rank == 0:
+#    os.environ["ENABLE_CONSOLE"] = 'True'
+#    os.environ["LOG_LEVEL_ALL"] = '0'
+
 # model
 if re.search("llama", args.model.lower()) or re.search("bloom", args.model.lower()):
     from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
