@@ -8,9 +8,24 @@ import os
 import deepspeed
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import habana_frameworks.torch.hpex
+import lm_eval
 import lm_eval.tasks
 import lm_eval.evaluator
 torch.set_grad_enabled(False)
+
+
+def itrex_bootstrap_stderr(f, xs, iters):
+    from lm_eval.metrics import _bootstrap_internal, sample_stddev
+    res = []
+    chunk_size = min(1000, iters)
+    it = _bootstrap_internal(f, chunk_size)
+    for i in range(iters // chunk_size):
+        bootstrap = it((i, xs))
+        res.extend(bootstrap)
+    return sample_stddev(res)
+
+# to avoid out-of-memory caused by Popen for large language models.
+lm_eval.metrics.bootstrap_stderr = itrex_bootstrap_stderr
 
 
 parser = argparse.ArgumentParser()
@@ -71,7 +86,10 @@ if re.search("llama", args.model.lower()) or re.search("bloom", args.model.lower
             user_model = AutoModelForCausalLM.from_config(config, torch_dtype=model_dtype)
     else:
         model_dtype = torch.float16
-        user_model = AutoModelForCausalLM.from_pretrained(args.model, torch_dtype=model_dtype)
+        user_model = AutoModelForCausalLM.from_pretrained(
+            args.model,
+            device_map='hpu',
+        )
 elif re.search("chatglm", args.model.lower()):
     from models.modeling_chatglm import ChatGLMForConditionalGeneration
     user_model = ChatGLMForConditionalGeneration.from_pretrained(
