@@ -4,6 +4,8 @@ import json
 import re
 import torch
 import transformers
+import os
+import deepspeed
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import habana_frameworks.torch.hpex
 import lm_eval.tasks
@@ -55,12 +57,6 @@ parser.add_argument("--local_rank",
 args = parser.parse_args()
 
 
-if args.approach is None:
-    import habana_frameworks.torch.core as htcore
-    htcore.hpu_set_env()
-
-import os
-import deepspeed
 world_size = int(os.getenv('WORLD_SIZE', '1'))
 
 # model
@@ -91,6 +87,7 @@ else:
         revision=args.revision,
         device_map='hpu',
     )
+
 # tokenizer
 if re.search("baichuan", args.model.lower()):
     from models.tokenization_baichuan import BaichuanTokenizer
@@ -104,15 +101,6 @@ else:
         trust_remote_code=args.trust_remote_code
     )
 
-import os
-world_size = int(os.getenv('WORLD_SIZE', '1'))
-if args.approach is None and world_size == 1:
-    from habana_frameworks.torch.core.quantization import _mark_params_as_const, _check_params_as_const
-    _mark_params_as_const(user_model)
-    _check_params_as_const(user_model)
-    import habana_frameworks.torch.core as htcore
-    htcore.hpu_initialize(user_model)
-
 if world_size > 1:
     ds_model = deepspeed.init_inference(user_model,
                                         mp_size=world_size,
@@ -120,8 +108,6 @@ if world_size > 1:
                                         replace_with_kernel_inject=False)
     user_model = ds_model.module
 
-# to channels last
-#user_model = user_model.to(memory_format=torch.channels_last)
 user_model.eval()
 
 if args.approach in ["dynamic", "static"]:
