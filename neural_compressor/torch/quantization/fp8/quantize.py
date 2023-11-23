@@ -99,7 +99,6 @@ def _remove_observer(model, qconfig):
             if dist.is_initialized():
                 amax = amax.to('hpu')
                 dist.all_reduce(amax, op=ReduceOp.MAX)
-            print('rank', dist.get_rank() if dist.is_initialized() else -1, ':', name, ":", amax, flush=True)
             scale = HF_max / amax
             module.register_parameter('scale', torch.nn.Parameter(scale))
             delattr(module, 'input_activation_post_process')
@@ -113,7 +112,6 @@ def _remove_observer(model, qconfig):
             if dist.is_initialized():
                 amax = amax.to('hpu')
                 dist.all_reduce(amax, op=ReduceOp.MAX)
-            print('rank', dist.get_rank() if dist.is_initialized() else -1, ':', name, ":", amax, flush=True)
             scale = HF_max / amax
             module.register_parameter('scale1', torch.nn.Parameter(scale))
             delattr(module, 'input_activation_post_process1')

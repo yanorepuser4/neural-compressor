@@ -8,6 +8,8 @@ import os
 import deepspeed
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import habana_frameworks.torch.hpex
+from habana_frameworks.torch.hpu import memory_stats
+import numpy as np
 import lm_eval
 import lm_eval.tasks
 import lm_eval.evaluator
@@ -194,7 +196,7 @@ if args.to_graph:
     user_model = htgraphs.wrap_in_hpu_graph(user_model)
 
 if args.generate:
-    input_prompt = "DeepSpeed is a machine learning framework"
+    input_prompt = "Here is my prompt"
     print("Prompt sentence:", input_prompt)
     generation_config = {
         "min_new_tokens": args.max_new_tokens, "max_new_tokens": args.max_new_tokens,
@@ -328,3 +330,13 @@ if args.accuracy:
             print("Accuracy for %s is: %s" % (task_name, results["results"][task_name]["word_perplexity"]), flush=True)
         else:
             print("Accuracy for %s is: %s" % (task_name, results["results"][task_name]["acc"]), flush=True)
+
+# show memory usage
+mem_stats = memory_stats()
+mem_dict = {
+    "memory_allocated (GB)": np.round(mem_stats["InUse"] / 1024**3, 2),
+    "max_memory_allocated (GB)": np.round(mem_stats["MaxInUse"] / 1024**3, 2),
+    "total_memory_available (GB)": np.round(mem_stats["Limit"] / 1024**3, 2),
+}
+for k, v in mem_dict.items():
+    print("{:35} = {} GB".format(k.replace("_", " ").capitalize(), v))
