@@ -339,4 +339,4 @@ mem_dict = {
     "total_memory_available (GB)": np.round(mem_stats["Limit"] / 1024**3, 2),
 }
 for k, v in mem_dict.items():
-    print("{:35} = {} GB".format(k.replace("_", " ").capitalize(), v))
+    print("{:35} = {} GB".format(k[:-5].replace("_", " ").capitalize(), v))
