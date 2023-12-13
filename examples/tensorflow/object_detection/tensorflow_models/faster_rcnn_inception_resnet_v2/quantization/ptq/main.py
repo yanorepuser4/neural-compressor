@@ -43,6 +43,13 @@ arg_parser.add_argument('--benchmark', dest='benchmark',
                     action='store_true', help='run benchmark')
 args = arg_parser.parse_args()
 
+def itex_installed():
+    try:
+        import intel_extension_for_tensorflow
+        return True
+    except:
+        return False
+
 def evaluate(model):
     """Custom evaluate function to estimate the accuracy of the model.
 
@@ -58,9 +65,14 @@ def evaluate(model):
     iteration = -1
     if args.benchmark and args.mode == 'performance':
         iteration = args.iters
-    input_tensor_names = ["image_tensor"]
-    output_tensor_names = ["num_detections", "detection_boxes", \
-                                    "detection_scores", "detection_classes"]
+    if itex_installed():
+        input_tensor_names = ["image_tensor:0"]
+        output_tensor_names = ["num_detections:0", "detection_boxes:0", \
+                                        "detection_scores:0", "detection_classes:0"]
+    else:
+        input_tensor_names = ["image_tensor"]
+        output_tensor_names = ["num_detections", "detection_boxes", \
+                                        "detection_scores", "detection_classes"]
     metric = COCOmAPv2(output_index_mapping={'num_detections':0, 'boxes':1, 'scores':2, 'classes':3})
 
     if isinstance(model, AutoTrackable):
