@@ -77,6 +77,10 @@ def evaluate(model):
 
     if isinstance(model, AutoTrackable):
         infer = model.signatures["serving_default"]
+        print('***********************************************************')
+        print(infer.inputs)
+        print('***********************************************************')
+        print(infer.outputs)
         def eval_func(dataloader):
             latency_list = []
             for idx, (inputs, labels) in enumerate(dataloader):
