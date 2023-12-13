@@ -77,7 +77,7 @@ def evaluate(model):
 
     if isinstance(model, AutoTrackable):
         infer = model.signatures["serving_default"]
-        input_tensor_names = infer.inputs[0]
+        input_tensor_names = [infer.inputs[0].name]
         print('***********************************************************')
         print(infer.inputs)
         print('***********************************************************')
