@@ -21,12 +21,36 @@ from tensorflow.python.eager import wrap_function
 from tensorflow.python.util import nest
 from tensorflow.python.saved_model import save
 from utils import parse_saved_model, reconstruct_saved_model
-# from insert_qdq import GenerateGraphWithQDQPattern
-from configs import op_wise_config, int8_sequences
+
+from neural_compressor.adaptor.tf_utils.transform_graph.rerange_quantized_concat import RerangeQuantizedConcat
+from neural_compressor.adaptor.tf_utils.transform_graph.bias_correction import BiasCorrection
+from neural_compressor.adaptor.tf_utils.graph_rewriter.generic.remove_training_nodes import RemoveTrainingNodesOptimizer
+from neural_compressor.adaptor.tf_utils.graph_rewriter.generic.strip_unused_nodes import StripUnusedNodesOptimizer
+from neural_compressor.adaptor.tf_utils.graph_rewriter.generic.fold_batch_norm import FoldBatchNormNodesOptimizer
+from neural_compressor.adaptor.tf_utils.graph_rewriter.generic.fuse_pad_with_conv import FusePadWithConv2DOptimizer
+from neural_compressor.adaptor.tf_utils.graph_rewriter.generic.strip_equivalent_nodes import StripEquivalentNodesOptimizer
+from neural_compressor.adaptor.tf_utils.graph_rewriter.generic.fuse_pad_with_fp32_conv import FusePadWithFP32Conv2DOptimizer
+from neural_compressor.adaptor.tf_utils.graph_rewriter.int8.freeze_value import FreezeValueTransformer
+from neural_compressor.adaptor.tf_utils.graph_rewriter.int8.freeze_fake_quant import FreezeFakeQuantOpOptimizer
+from neural_compressor.adaptor.tf_utils.graph_rewriter.int8.fuse_conv_requantize import FuseConvRequantizeTransformer
+from neural_compressor.adaptor.tf_utils.graph_rewriter.int8.fuse_matmul_requantize import FuseMatMulRequantizeTransformer
+from neural_compressor.adaptor.tf_utils.graph_rewriter.int8.fuse_matmul_requantize import FuseMatMulRequantizeDequantizeTransformer
+from neural_compressor.adaptor.tf_utils.graph_rewriter.int8.fuse_matmul_requantize import FuseMatMulRequantizeNewAPITransformer
+from neural_compressor.adaptor.tf_utils.graph_rewriter.int8.fuse_matmul_requantize import FuseMatMulRequantizeDequantizeNewAPITransformer
+from neural_compressor.adaptor.tf_utils.graph_rewriter.int8.fuse_conv_redundant_dequantize import FuseConvRedundantDequantizeTransformer
+from neural_compressor.adaptor.tf_utils.graph_rewriter.int8.fuse_matmul_redundant_dequantize import FuseMatMulRedundantDequantizeTransformer
+from neural_compressor.adaptor.tf_utils.graph_rewriter.int8.scale_propagation import ScaleProPagationTransformer
+from neural_compressor.adaptor.tf_utils.graph_rewriter.bf16.bf16_convert import BF16Convert
+from neural_compressor.adaptor.tf_utils.graph_rewriter.int8.post_quantized_op_cse import PostCseOptimizer
+from neural_compressor.adaptor.tf_utils.graph_rewriter.int8.post_hostconst_converter import PostHostConstConverter
+from neural_compressor.adaptor.tf_utils.graph_rewriter.int8.meta_op_optimizer import MetaInfoChangingMemOpOptimizer
+from neural_compressor.adaptor.tf_utils.graph_rewriter.qdq.insert_qdq_pattern import GenerateGraphWithQDQPattern
+from neural_compressor.adaptor.tf_utils.graph_rewriter.qdq.share_qdq_y_pattern import ShareQDQForItexYPatternOptimizer
+from neural_compressor.adaptor.tf_utils.graph_rewriter.qdq.merge_duplicated_qdq import MergeDuplicatedQDQOptimizer
 
 class ConvertSavedModel():
-    def __init__(self, src='./gpt-j-6B', dst='./converted_gpt-j-6B', 
-                        evaluate=None, op_wise_config={}, int8_sequences={}):
+    def __init__(self, src='./gpt-j-6B', dst='./converted_gpt-j-6B', evaluate=None,
+                        op_wise_config={}, int8_sequences={}, signature_names=["serving_default"]):
         self.src = src
         self.dst = dst
         self.fp32_ops = []
@@ -36,10 +60,14 @@ class ConvertSavedModel():
         self.itex_mode = False
         self.fake_quant = False 
         self.evaluate = evaluate
+        self.first_signature = True
         self.performance_only = False
+        self.target_signature_name = None
         self.op_wise_config = op_wise_config
         self.int8_sequences = int8_sequences
         self.weight_tensor_minmax_dict = {}
+        self.signature_names = signature_names
+        self.tmp_path = './intermediate_saved_model'
 
     def inc_preoptimize(self, graph_def):
         from neural_compressor import Model
@@ -73,7 +101,7 @@ class ConvertSavedModel():
                         matched_add_nodes.append((i,))
         return matched_add_nodes
 
-    def _adjust_weight(self, graph_def):
+    def _adjust_weight(self, graph_def_dict):
         """In-place adjust weight by scale.
 
         Args:
@@ -83,8 +111,10 @@ class ConvertSavedModel():
         """
         # scale: (ic,)
         from utils import weight_name_mapping
-        reconstruct_saved_model(graph_def, self.func, self.frozen_func, self._saved_model, self.dst)
-        model = load.load(self.dst, [tag_constants.SERVING])
+        reconstruct_saved_model(graph_def_dict, self._saved_model, self.tmp_path)
+        model = load.load(self.tmp_path, [tag_constants.SERVING])
+        if not self.first_signature:
+            return model
         for idx, weight_tensor in enumerate(model.variables):
             parsed_weight_name = weight_name_mapping(weight_tensor.name)
             if parsed_weight_name in self.sq_weight_scale_dict:
@@ -96,16 +126,80 @@ class ConvertSavedModel():
                     self.weight_tensor_minmax_dict[parsed_weight_name] = [np.min(W), np.max(W)]
         return model
 
-    def _inference(self, sampling_graph_def):
+    def _freeze_requantization_ranges(self, additional_data=None):
+        """Freeze requantization ranges after doing quantization."""
+        self._tmp_graph_def, quantizev2_max = FreezeValueTransformer(
+            self._tmp_graph_def,
+            self._calibration_data,
+            '__max:', device=self.device).do_transformation()
+        self._tmp_graph_def, quantizev2_min = FreezeValueTransformer(
+            self._tmp_graph_def,
+            self._calibration_data,
+            '__min:', device=self.device).do_transformation()
+        self._tmp_graph_def, requant_min_max= FreezeValueTransformer(
+            self._tmp_graph_def,
+            self._calibration_data,
+            '__requant_min_max',
+            tensor_data= additional_data,
+            device=self.device,
+            ).do_transformation()
+
+    def _fuse_requantize_with_fused_quantized_node(self, graph_def):
+        """Fuse the Requantize/Dequantize with fused quantized Ops."""
+        if self.fake_quant: # pragma: no cover
+            self._tmp_graph_def = FreezeFakeQuantOpOptimizer(
+                self._tmp_graph_def).do_transformation()
+
+        self._tmp_graph_def = FuseConvRequantizeTransformer(
+            self._tmp_graph_def,
+            self.device, self.new_api).do_transformation()
+
+        if not self.fake_quant:
+            self._tmp_graph_def = FuseMatMulRequantizeNewAPITransformer(
+                self._tmp_graph_def).do_transformation()
+
+            self._tmp_graph_def = FuseMatMulRequantizeDequantizeNewAPITransformer(
+                self._tmp_graph_def).do_transformation()
+
+        self._tmp_graph_def = StripUnusedNodesOptimizer(
+            self._tmp_graph_def,
+            ['attention_mask', 'input_ids'],
+            ['Identity', 'Identity_1']).do_transformation()
+
+        input_output_names = ['attention_mask', 'input_ids']+ ['Identity', 'Identity_1']
+        self._tmp_graph_def = RemoveTrainingNodesOptimizer(
+            self._tmp_graph_def,
+            protected_nodes=input_output_names).do_transformation()
+
+        self._tmp_graph_def = FoldBatchNormNodesOptimizer(
+            self._tmp_graph_def).do_transformation()
+
+        if self.performance_only or ('scale_propagation_concat' in self.recipes \
+             and self.recipes['scale_propagation_concat']):
+            self._tmp_graph_def = RerangeQuantizedConcat(self._tmp_graph_def,
+                self.device, performance_only=self.performance_only).do_transformation()
+
+        self._tmp_graph_def = MetaInfoChangingMemOpOptimizer(
+            self._tmp_graph_def).do_transformation()
+
+        self._tmp_graph_def = StripEquivalentNodesOptimizer(
+            self._tmp_graph_def, ['Identity', 'Identity_1']).do_transformation()
+
+        # self._tmp_graph_def = BiasCorrection(
+        #     self._tmp_graph_def, self.model.graph_def, self.new_api).do_transformation()
+
+        self._tmp_graph_def.library.CopyFrom(graph_def.library)
+
+    def _inference(self, sampling_graph_def_dict):
         import time
         print('Inference the saved_model and capture outputs to files')
-        model = self._adjust_weight(sampling_graph_def)
+        model = self._adjust_weight(sampling_graph_def_dict)
         start = time.time()
-        _, _ = self.evaluate(model, iter=1)
+        self.evaluate(model)
         end = time.time()
         print('Calibration Inference Time: ', end-start)
 
-    def quantize(self, graph_def):
+    def quantize(self, graph_def_dict):
         import copy
         import tempfile
         from neural_compressor.utils.utility import CaptureOutputToFile
@@ -118,10 +212,11 @@ class ConvertSavedModel():
         from neural_compressor.adaptor.tf_utils.graph_rewriter.generic.strip_unused_nodes import StripUnusedNodesOptimizer
         from neural_compressor.adaptor.tf_utils.graph_rewriter.qdq.share_qdq_y_pattern import ShareQDQForItexYPatternOptimizer
         from neural_compressor.adaptor.tf_utils.graph_rewriter.generic.fuse_pad_with_fp32_conv import FusePadWithFP32Conv2DOptimizer
-
+        
+        graph_def = graph_def_dict[self.target_signature_name][0]
         self.quantized_node_info = OptimizeQDQGraph(graph_def,
-                                        ['attention_mask', 'input_ids'],
-                                        ['Identity', 'Identity_1'],
+                                        ['past_key_values', 'attention_mask', 'input_ids'],
+                                        ['Identity_1', 'Identity'],
                                         self.op_wise_config,
                                         self.int8_sequences,
                                         self.device,
@@ -134,11 +229,12 @@ class ConvertSavedModel():
             self.quantized_node_info.extend(self._search_y_pattern_for_itex(graph_def))
 
         if not self.quantized_node_info:
-            return graph_def
+            raise "The quantized_node_info should not be empty!"
 
         print('Start to do calibration')
         # Calibration using sampling model
         sampling_graph_def = copy.deepcopy(graph_def)
+
         # TODO: this is a workaround to make Min/Max node be completly eliminated in int8 graph
         # after enabling pad+conv2d in new API.
         non_pad_ops = list(list(set(self.fp32_ops).union(set(self.bf16_ops))))
@@ -153,13 +249,14 @@ class ConvertSavedModel():
         for i in self.quantized_node_info:
             sampling_graph_def, _ = InsertPrintMinMaxNode(
                 sampling_graph_def, i[0], i[-1], self.new_api).do_transformation()
-
+        
         tmp_dump_file = tempfile.mkstemp(suffix='.log')[1]
-
+        graph_def_dict[self.target_signature_name][0] = sampling_graph_def
         with CaptureOutputToFile(tmp_dump_file):
-            self._inference(sampling_graph_def)
+            self._inference(graph_def_dict)
         self._calibration_data = Helper.gen_valid_sampling_log(tmp_dump_file)
 
+        graph_def_dict[self.target_signature_name][0] = graph_def
         del sampling_graph_def
         import gc
         gc.collect()
@@ -169,35 +266,37 @@ class ConvertSavedModel():
               graph_def, self._calibration_data, self.op_wise_config, self.fake_quant, 
               self.fp32_ops, self.bf16_ops, self.quantized_node_info, self.device, 
               self.performance_only, self.itex_mode, self.weight_tensor_minmax_dict).do_transformation()
+
+        tf.import_graph_def(self._tmp_graph_def, name='')
+
+        self._tmp_graph_def, exclude_node_names = OptimizeQDQGraph(
+                self._tmp_graph_def,
+                ['attention_mask', 'input_ids'],
+                ['Identity', 'Identity_1'],
+                self.op_wise_config,
+                self.int8_sequences,
+                self.device,
+                self.fake_quant,
+                self.new_api,
+                self.performance_only,
+                self.itex_mode,
+            ).do_transform()
+        self._freeze_requantization_ranges({})
+        self._fuse_requantize_with_fused_quantized_node(graph_def)
+
+        tf.import_graph_def(self._tmp_graph_def, name='')
+
+        post_optimize_graph_def = FuseMatMulRedundantDequantizeTransformer(self._tmp_graph_def).do_transformation()
+        post_optimize_graph_def.library.CopyFrom(self._tmp_graph_def.library)
+        self._tmp_graph_def = post_optimize_graph_def
+
+        post_cse_graph_def = PostCseOptimizer(self._tmp_graph_def).do_transformation()
+        post_hostconst_graph_def = PostHostConstConverter(post_cse_graph_def).do_transformation()
+        post_hostconst_graph_def.library.CopyFrom(self._tmp_graph_def.library)
+        self._tmp_graph_def = post_hostconst_graph_def
         
-        self._tmp_graph_def, _ = FreezeValueTransformer(
-            self._tmp_graph_def,
-            self._calibration_data,
-            '__max:',
-            self.itex_mode).do_transformation()
-        self._tmp_graph_def, _ = FreezeValueTransformer(
-            self._tmp_graph_def,
-            self._calibration_data,
-            '__min:',
-            self.itex_mode).do_transformation()
-        self._tmp_graph_def, _= FreezeValueTransformer(
-            self._tmp_graph_def,
-            self._calibration_data,
-            '__requant_min_max',
-            tensor_data= {},
-            device=self.device,
-            itex_mode=self.itex_mode).do_transformation()
-
-        self._tmp_graph_def = StripUnusedNodesOptimizer(
-            self._tmp_graph_def,
-            ['attention_mask', 'input_ids'],
-            ['Identity', 'Identity_1']).do_transformation()
-
-        if self.itex_mode:
-            self._tmp_graph_def = ShareQDQForItexYPatternOptimizer(self._tmp_graph_def).do_transformation()
-        self._tmp_graph_def = MergeDuplicatedQDQOptimizer(self._tmp_graph_def).do_transformation()
-
-        return self._tmp_graph_def
+        graph_def_dict[self.target_signature_name][0] = self._tmp_graph_def
+        return graph_def_dict
 
     def smooth_quant(self, model_path, calib_iter=1, tune_cfg=None, alpha=0.491, folding=False,
                      percentile=99.999, op_types=['MatMul', 'Conv2D'], scales_per_op=True):
@@ -221,35 +320,41 @@ class ConvertSavedModel():
         # Get the nodes list which can't be quantized from tune_cfg
         black_nodes = []
 
-        # Run calibration to get max values per channel
-        from smooth_quant import SmoothQuantCalibration
-        calibration = SmoothQuantCalibration(model_path, self.evaluate, self.dst, \
-                                                    op_types, percentile, black_nodes)
-        max_vals_per_channel, sq_weight_node_names, sq_weight_tensor_dict = calibration()
+        if self.first_signature:
+            # Run calibration to get max values per channel
+            from smooth_quant import SmoothQuantCalibration
+            calibration = SmoothQuantCalibration(model_path, self.evaluate, op_types, percentile,\
+                                                        black_nodes, self.signature_names, self.target_signature_name)
+            self.max_vals_per_channel, self.sq_weight_node_names, self.sq_weight_tensor_dict = calibration()
 
         # Calculate the smooth quant scaler and insert Mul op into the graph
-        from smooth_quant  import SmoothQuantScaler
-        scaler = SmoothQuantScaler(model_path, self.dst, alpha, scales_per_op)
-        sq_graph_def, self._saved_model, self.func, \
-            self.frozen_func, self.sq_weight_scale_dict = scaler.transform(max_vals_per_channel,
-                                          sq_weight_tensor_dict, sq_weight_node_names)
-        return sq_graph_def
+        from smooth_quant import SmoothQuantScaler
+        scaler = SmoothQuantScaler(model_path, alpha, scales_per_op, self.signature_names, self.target_signature_name)
+        sq_graph_def_dict, self._saved_model, self.sq_weight_scale_dict = scaler.transform(self.max_vals_per_channel,
+                                          self.sq_weight_tensor_dict, self.sq_weight_node_names)
+        return sq_graph_def_dict
 
     def __call__(self):
-        sq_graph_def = self.smooth_quant(self.src)
+        for target_signature_name in self.signature_names:
+            self.target_signature_name = target_signature_name
 
-        f=tf.io.gfile.GFile('extracted_graph_def.pb','wb')
-        f.write(sq_graph_def.SerializeToString()) 
+            src_model_path = self.src if self.first_signature else self.dst
+            sq_graph_def_dict = self.smooth_quant(src_model_path)
 
-        graph_def = self.inc_preoptimize(sq_graph_def)
+            sq_graph_def = sq_graph_def_dict[self.target_signature_name][0]
+            f=tf.io.gfile.GFile('sq_graph_def.pb','wb')
+            f.write(sq_graph_def.SerializeToString()) 
 
-        print('Start to apply quantization')
-        quantized_graph_def = self.quantize(graph_def)
+            sq_graph_def_dict[self.target_signature_name][0] = self.inc_preoptimize(sq_graph_def)
+            
+            print('Start to apply quantization')
+            quantized_graph_def_dict = self.quantize(sq_graph_def_dict)
+            
+            f=tf.io.gfile.GFile('converted_graph_def.pb','wb')
+            f.write(quantized_graph_def_dict[self.target_signature_name][0].SerializeToString()) 
 
-        f=tf.io.gfile.GFile('converted_graph_def.pb','wb')
-        f.write(quantized_graph_def.SerializeToString()) 
-
-        print('Save Quantized model to ', self.dst)
-        model = self._adjust_weight(quantized_graph_def)
-        graph_def, _saved_model, func, frozen_func = parse_saved_model(model)
-        reconstruct_saved_model(graph_def, func, frozen_func, _saved_model, self.dst)
+            print('Save Quantized model to ', self.dst)
+            model = self._adjust_weight(quantized_graph_def_dict)
+            graph_def_dict, _saved_model = parse_saved_model(model, self.signature_names)
+            reconstruct_saved_model(graph_def_dict, _saved_model, self.dst)
+            self.first_signature = False

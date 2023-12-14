@@ -19,6 +19,7 @@ from tensorflow.python.eager import wrap_function
 from tensorflow.python.util import nest
 from tensorflow.python.saved_model import save
 
+
 def apply_inlining(func):
     """Apply an inlining optimization to the function's graph definition."""
     graph_def = func.graph.as_graph_def()
@@ -84,6 +85,7 @@ def construct_function_from_graph_def(func, graph_def, frozen_func=None):
     new_func = wrap_function.function_from_graph_def(
         graph_def, [tensor.name for tensor in frozen_func.inputs],
         [tensor.name for tensor in frozen_func.outputs], captures)
+
     new_func.graph.structured_outputs = nest.pack_sequence_as(
         func.graph.structured_outputs, new_func.graph.structured_outputs)
     # new_func._function_type = func.function_type  # pylint: disable=protected-access
@@ -94,18 +96,7 @@ def construct_function_from_graph_def(func, graph_def, frozen_func=None):
 
     return new_func
 
-def parse_saved_model(model):
-    config = tf.compat.v1.ConfigProto()
-    config.use_per_session_threads = 1
-    config.inter_op_parallelism_threads = 1
-
-    if isinstance(model, str):
-        _saved_model = load.load(model, [tag_constants.SERVING])
-    else:
-        _saved_model = model
-        
-    func = _saved_model.signatures[signature_constants.DEFAULT_SERVING_SIGNATURE_DEF_KEY]
-
+def get_graph_def_from_func(func):
     inlined_graph_def = apply_inlining(func)
     # self._annotate_variable_ops(func, inlined_graph_def)
     frozen_func = construct_function_from_graph_def(func, inlined_graph_def)
@@ -126,12 +117,33 @@ def parse_saved_model(model):
     rewrite_options.min_graph_nodes = -1
     graph_def = tf_optimizer.OptimizeGraph(grappler_session_config,
                                         grappler_meta_graph_def, graph_id=b"tf_graph")
-    return graph_def, _saved_model, func, frozen_func
+    return graph_def, frozen_func
 
-def reconstruct_saved_model(graph_def, func, frozen_func, trackable, path):
-    converted_func = construct_function_from_graph_def(
-    func, graph_def, frozen_func)
-    signatures = {signature_constants.DEFAULT_SERVING_SIGNATURE_DEF_KEY: converted_func}
+def parse_saved_model(model, signature_names=[signature_constants.DEFAULT_SERVING_SIGNATURE_DEF_KEY]):
+    config = tf.compat.v1.ConfigProto()
+    config.use_per_session_threads = 1
+    config.inter_op_parallelism_threads = 1
+
+    if isinstance(model, str):
+        # _saved_model = load.load(model, [tag_constants.SERVING])
+        _saved_model = load.load(model)
+    else:
+        _saved_model = model
+
+    graph_func_dict = {}
+    for signature_name in signature_names:
+        func = _saved_model.signatures[signature_name]
+        graph_def, frozen_func = get_graph_def_from_func(func)
+        graph_func_dict[signature_name] = [graph_def, func, frozen_func]
+    
+    return graph_func_dict, _saved_model
+
+def reconstruct_saved_model(graph_func_dict, trackable, path):
+    signatures = {}
+    for signature_name in graph_func_dict.keys():
+        graph_def, func, frozen_func = graph_func_dict[signature_name]
+        converted_func = construct_function_from_graph_def(func, graph_def, frozen_func)
+        signatures.update({signature_name: converted_func})
     save.save(trackable, path, signatures, options=None)
 
 def get_suffix(input_str):
@@ -164,7 +176,16 @@ def node_name_from_input(node_name):
         node_name = m.group(1)
     return node_name
 
+# def weight_name_mapping(name):
+#     name = name.replace('tfgptj_for_causal_lm', 'StatefulPartitionedCall')
+#     name = name.replace('kernel:0', 'Tensordot/ReadVariableOp')
+#     return name
+
 def weight_name_mapping(name):
-    name = name.replace('tfgptj_for_causal_lm', 'StatefulPartitionedCall')
+    name = 'StatefulPartitionedCall/'+name
     name = name.replace('kernel:0', 'Tensordot/ReadVariableOp')
     return name
+
+# graph_func_dict, _saved_model = parse_saved_model('./gpt-j-6B-2-signatures-first-second-iter', ["serving_default", "serving_first_iteration"])
+# # graph_func_dict, _saved_model = parse_saved_model('./gpt-j-6B-2-signatures-first-second-iter')
+# reconstruct_saved_model(graph_func_dict, _saved_model, './converted_gpt-j-6B-2-signatures-first-second-iter')

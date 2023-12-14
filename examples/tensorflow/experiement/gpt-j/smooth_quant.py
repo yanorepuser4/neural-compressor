@@ -50,11 +50,12 @@ class SmoothQuantCalibration:
         percentile (float): The percentile of calibration to remove outliers.
         black_nodes (List[str]): A list of node names to be ignored during calibration.
     """
-    def __init__(self, model_path, evaluate, target_path, op_types, percentile, black_nodes):
+    def __init__(self, model_path, evaluate, op_types, \
+                percentile, black_nodes, signature_names, target_signature_name):
         """Initializes a SmoothQuantCalibration object."""
         self.model = model_path
         self.evaluate = evaluate
-        self.target_path = target_path
+        self.tmp_path = './intermediate_saved_model'
         # self.iterations = 3
         self.op_types = op_types
         self.percentile = percentile
@@ -64,6 +65,8 @@ class SmoothQuantCalibration:
         self._sq_output_tensor_dict = {}
         self._sq_weight_tensor_dict = {}
         self._sq_weight_node_names = {} # mapping from its weight node name to the concrete output node name
+        self.signature_names = signature_names
+        self.target_signature_name = target_signature_name
 
     def _parse_calibration_logs(self, tmp_dump_file):
         valid_data = []
@@ -204,11 +207,14 @@ class SmoothQuantCalibration:
     def _inference(self, sampling_graph_def):
         import time
         print('Inference the saved_model and capture outputs to files')
-        reconstruct_saved_model(sampling_graph_def, self.func, self.frozen_func, self._saved_model, self.target_path)
+        sampling_graph_dict = self.graph_func_dict
+        sampling_graph_dict[self.target_signature_name][0] = sampling_graph_def
+        reconstruct_saved_model(sampling_graph_dict, self._saved_model, self.tmp_path)
         start = time.time()
-        _, _ = self.evaluate(self.target_path, iter=1)
+        self.evaluate(self.tmp_path)
         end = time.time()
         print('Calibration Inference Time: ', end-start)
+        self.graph_func_dict[self.target_signature_name][0] = self.graph_def
 
     def _inference_for_calibration(self):
         """Run the calibration on the input graph.
@@ -219,7 +225,6 @@ class SmoothQuantCalibration:
         # ITEX optimization has broken INC calibration process.
         # INC needs turn off ITEX optimization pass in calibration stage.
         # TODO ITEX will provide API to replace setting environment variable.
-
         sampling_graph_def = copy.deepcopy(self.graph_def)
         sampling_graph_def = self._insert_print_for_activation(sampling_graph_def)
         tmp_dump_file = tempfile.mkstemp(suffix='.log')[1]
@@ -296,7 +301,9 @@ class SmoothQuantCalibration:
             max_vals_per_channel (dict): A dictionary containing the maximum values per channel.
             shape_infos (dict): A dictionary containing the shape information.
         """
-        self.graph_def, self._saved_model, self.func, self.frozen_func = parse_saved_model(self.model)
+        # self.graph_def, self._saved_model, self.func, self.frozen_func = parse_saved_model(self.model, )
+        self.graph_func_dict, self._saved_model = parse_saved_model(self.model, self.signature_names)
+        self.graph_def = self.graph_func_dict[self.target_signature_name][0]
         self._generate_calibration_data()
         max_vals_per_channel = {}
         for key in self._sq_output_tensor_dict.keys():
@@ -316,13 +323,15 @@ class SmoothQuantScaler:
                        ops with the same input will share a scale
     """
 
-    def __init__(self, model_path, target_path, alpha, scales_per_op):
+    def __init__(self, model_path, alpha, scales_per_op, signature_names, target_signature_name):
         """Initialization."""
         self.model = model_path
-        self.target_path = target_path
+        self.tmp_path = './intermediate_saved_model'
         self.alpha = alpha
         self.scales_per_op = scales_per_op
         self.mul_list = []
+        self.signature_names = signature_names
+        self.target_signature_name = target_signature_name
 
     def _adjust_activation(self, scale, input_node_name, output_node_name, w_i):
         """Insert the Mul node after the activation before the weight node.
@@ -376,7 +385,8 @@ class SmoothQuantScaler:
         Returns:
             tuple: A tuple containing the modified model and a list of the inserted multiplication nodes.
         """
-        self.graph_def, self._saved_model, self.func, self.frozen_func = parse_saved_model(self.model)
+        self.graph_def_dict, self._saved_model = parse_saved_model(self.model, self.signature_names)
+        self.graph_def = self.graph_def_dict[self.target_signature_name][0]
         self.g_analyzer = GraphAnalyzer()
         self.g_analyzer.graph = self.graph_def
         self.graph_info = self.g_analyzer.parse_graph()
@@ -429,4 +439,6 @@ class SmoothQuantScaler:
             pass
         sq_graph_def = self.g_analyzer.dump_graph()
         sq_graph_def.library.CopyFrom(self.graph_def.library)
-        return sq_graph_def, self._saved_model, self.func, self.frozen_func, self.sq_weight_scale_dict
+        self.graph_def_dict[self.target_signature_name][0] = sq_graph_def
+        return  self.graph_def_dict, self._saved_model, self.sq_weight_scale_dict
+        
