@@ -144,7 +144,6 @@ mydata = tokenizer(rdata, return_tensors="tf").input_ids
 # marg = defaultdict(lambda: 0, marg)
 
 
-gpt_j_model_path = "./gpt-j-6B-2-signatures-first-second-iter"
 infer = Inference(dataset = mydata)
 
 def main():    
@@ -159,6 +158,7 @@ def main():
                                       op_wise_config=op_wise_config,
                                       int8_sequences=int8_sequences,
                                       signature_names=["serving_first_iteration", "serving_default"])
+                                    
         converter()
 
 if __name__ == "__main__":

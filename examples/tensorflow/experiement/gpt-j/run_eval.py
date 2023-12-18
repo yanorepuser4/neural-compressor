@@ -102,7 +102,6 @@ class ModelArguments:
     )
 
 
-
 @dataclass
 class DataTrainingArguments:
     """
@@ -130,12 +129,38 @@ class DataTrainingArguments:
         metadata={"help": "The number of processes to use for the preprocessing."},
     )
     
+def shape_list(tensor):
+        """
+        Deal with dynamic shape in tensorflow cleanly.
+
+        Args:
+            tensor (`tf.Tensor` or `np.ndarray`): The tensor we want the shape of.
+
+        Returns:
+            `List[int]`: The shape of the tensor as a list.
+        """
+        if isinstance(tensor, np.ndarray):
+            return list(tensor.shape)
+
+        dynamic = tf.shape(tensor)
+
+        if tensor.shape == tf.TensorShape(None):
+            return dynamic
+
+        static = tensor.shape.as_list()
+
+        return [dynamic[i] if s is None else s for i, s in enumerate(static)]
+    
+    
 class Inference():
     def __init__(self) -> None:
-        self.dur = 0
+        self.dur = []
         self.infer = None
         self.batch_size = 1
         self.max_new_tokens = 1
+        self.num_beams = 4
+        self.tokens_to_generate = 1
+        self.input_tokens = 32
 
     def prepare_attention_mask_for_generation(
         self,
@@ -152,7 +177,8 @@ class Inference():
             return tf.cast(tf.math.not_equal(inputs, pad_token_id), dtype=tf.int32)
         else:
             return tf.ones(inputs.shape[:2], dtype=tf.int32)
-
+        
+        
     def greedy_search_cond_fn(self, generated, finished_sequences, cur_len, model_kwargs):
         """state termination condition fn."""
         return ~tf.reduce_all(finished_sequences)
@@ -160,25 +186,35 @@ class Inference():
         # define condition fn
     def greedy_search_body_fn(self, generated, finished_sequences, cur_len, model_kwargs):
         """state update fn."""
+        print("generated: ", generated.shape)
+        
         if model_kwargs.get("past_key_values") is None:
             input_ids = generated[:, :cur_len]
         else:
             input_ids = tf.expand_dims(generated[:, cur_len - 1], -1)
+        
 
         model_inputs = {'input_ids': input_ids, 'attention_mask': model_kwargs['attention_mask']}
+        #model_inputs = self.prepare_inputs_for_generation(input_ids, use_cache=True, **model_kwargs)
 
         start = time.time()
+        
         model_outputs = self.infer(**model_inputs)
         end = time.time()
 
-        self.dur = end - start
-        next_token_logits = model_outputs['logits'][:, -1]
+        self.dur += [end - start]
+        
+        if 'logits' in model_outputs.keys():
+            next_token_logits = model_outputs['logits'][:, -1]
+        else:
+            next_token_logits = model_outputs['output_0'][:, -1]
 
         # pre-process distribution
         next_tokens_scores = next_token_logits
 
         # argmax
         next_tokens = tf.argmax(next_tokens_scores, axis=-1, output_type=tf.int32)
+        
 
         pad_token_id = 50256
         eos_token_id = [50256]
@@ -192,14 +228,33 @@ class Inference():
             axis=0,
         )
         finished_sequences = finished_sequences | next_token_is_eos
-
+        
         # update `generated` and `cur_len`
         update_indices = tf.stack([tf.range(self.batch_size), tf.broadcast_to(cur_len, [self.batch_size])], axis=-1)
+        
         generated = tf.tensor_scatter_nd_update(tensor=generated, indices=update_indices, updates=next_tokens)
+       
+        #tf.concat([input_ids, next_tokens], axis=-1)
+        
         cur_len += 1
-
+        
+        #model_kwargs = self._update_model_kwargs_for_generation(model_outputs, model_kwargs)
+        
+        #update attention_masks
+        
+        attention_mask = model_kwargs["attention_mask"]
+        model_kwargs["attention_mask"] = tf.concat(
+                    [attention_mask, tf.ones((attention_mask.shape[0], 1), dtype=tf.int32)], axis=-1
+                )
+        
+        #model_kwargs = self._update_model_kwargs_for_generation(
+                    #model_outputs, model_kwargs, is_encoder_decoder=False
+                #)
+        
+        
+        
         return generated, finished_sequences, cur_len, model_kwargs
-
+    
     def generate(self, data):
         input_ids = tf.convert_to_tensor([data[:-1]], dtype=tf.int32)
         pad_token_id = 50256
@@ -224,31 +279,31 @@ class Inference():
         )
 
         return generated
-
+    
     def evaluate(self, path, tf_eval_dataset):
+        parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TFTrainingArguments))
+        model_args, data_args, run_args = parser.parse_args_into_dataclasses()
         model = tf.saved_model.load(path)
-        self.infer = model.signatures["serving_default"]
-        warmup = 5
-        iteration = None
-        latency_list = []
-        iteration = 200
+        self.infer = model.signatures["serving_first_iteration"]
+        iteration = 50
         correct = 0
         for idx, data in enumerate(tf_eval_dataset):
             print('Running Iteration: ', idx)
+            print(data)
             predictions = self.generate(data)
             
             if data[-1] == predictions[0][-1].numpy():
                 correct+=1
-                print('The answer is correct')
+                print("prediciton is correct")
             else:
-                print('The answer is incorrect')
+                print("prediction is incorrrect")
             print('Time taken: ', self.dur)
-            latency_list.append(self.dur)
+            #latency_list.append(self.dur)
             if iteration and idx >= iteration:
                 break
-        latency = np.array(latency_list[warmup:]).mean() / 1
-        acc = correct/(iteration+1)
-        return latency, acc
+        print(correct/iteration)
+        
+
 
 def main():
     parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TFTrainingArguments))
@@ -276,37 +331,13 @@ def main():
     text_column_name = "text" if "text" in column_names else column_names[0]
 
     mydata = tokenizer(raw_datasets["test"][text_column_name], return_tensors="np").input_ids
-
-    marg = {}
-    stacked = np.concatenate(mydata)
-    unique, counts = np.unique(stacked, return_counts=True)
-    counts = counts / np.sum(counts)
-
-    marg = dict(zip(unique, counts))
-    marg = defaultdict(lambda: 0, marg)
-
     with run_args.strategy.scope():
-        model = TFAutoModelForCausalLM.from_pretrained(model_args.model_name_or_path, config=config)
-        
         options = tf.data.Options()
         options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.OFF
         
         inference = Inference()
-        latency1, acc1 = inference.evaluate('./gpt-j-6B', mydata)
-        latency2, acc2 = inference.evaluate('./converted_gpt-j-6B', mydata)
-
-        print('---------------------------------------------------------')
-        print('The infrence results of original gpt-j with TF2.x API')
-        print("Batch size = {}".format(1))
-        print("Accuracy: {:.3f}%".format(acc1*100))
-        print("Latency: {:.3f} ms".format(latency1 * 1000))
-        print("Throughput: {:.3f} samples/sec".format(1. / latency1))
-        print('---------------------------------------------------------')
-        print('The infrence results of converted gpt-j with TF2.x API')
-        print("Batch size = {}".format(1))
-        print("Accuracy: {:.3f}%".format(acc2*100))
-        print("Latency: {:.3f} ms".format(latency2 * 1000))
-        print("Throughput: {:.3f} samples/sec".format(1. / latency2))
-
+        inference.evaluate('./converted_gpt-j-6B-2-signatures-first-second-iter', mydata)
+        
+        
 if __name__ == "__main__":
     main()

@@ -1,4 +1,5 @@
 import os
+import copy
 import numpy as np
 import tensorflow as tf
 from tensorflow.python.eager import context
@@ -113,8 +114,7 @@ class ConvertSavedModel():
         from utils import weight_name_mapping
         reconstruct_saved_model(graph_def_dict, self._saved_model, self.tmp_path)
         model = load.load(self.tmp_path, [tag_constants.SERVING])
-        if not self.first_signature:
-            return model
+
         for idx, weight_tensor in enumerate(model.variables):
             parsed_weight_name = weight_name_mapping(weight_tensor.name)
             if parsed_weight_name in self.sq_weight_scale_dict:
@@ -174,10 +174,10 @@ class ConvertSavedModel():
         self._tmp_graph_def = FoldBatchNormNodesOptimizer(
             self._tmp_graph_def).do_transformation()
 
-        if self.performance_only or ('scale_propagation_concat' in self.recipes \
-             and self.recipes['scale_propagation_concat']):
-            self._tmp_graph_def = RerangeQuantizedConcat(self._tmp_graph_def,
-                self.device, performance_only=self.performance_only).do_transformation()
+        # if self.performance_only or ('scale_propagation_concat' in self.recipes \
+        #      and self.recipes['scale_propagation_concat']):
+        #     self._tmp_graph_def = RerangeQuantizedConcat(self._tmp_graph_def,
+        #         self.device, performance_only=self.performance_only).do_transformation()
 
         self._tmp_graph_def = MetaInfoChangingMemOpOptimizer(
             self._tmp_graph_def).do_transformation()
@@ -335,11 +335,11 @@ class ConvertSavedModel():
         return sq_graph_def_dict
 
     def __call__(self):
+        res_graph_def_dict = {}
         for target_signature_name in self.signature_names:
             self.target_signature_name = target_signature_name
 
-            src_model_path = self.src if self.first_signature else self.dst
-            sq_graph_def_dict = self.smooth_quant(src_model_path)
+            sq_graph_def_dict = self.smooth_quant(self.src)
 
             sq_graph_def = sq_graph_def_dict[self.target_signature_name][0]
             f=tf.io.gfile.GFile('sq_graph_def.pb','wb')
@@ -352,9 +352,17 @@ class ConvertSavedModel():
             
             f=tf.io.gfile.GFile('converted_graph_def.pb','wb')
             f.write(quantized_graph_def_dict[self.target_signature_name][0].SerializeToString()) 
-
-            print('Save Quantized model to ', self.dst)
-            model = self._adjust_weight(quantized_graph_def_dict)
-            graph_def_dict, _saved_model = parse_saved_model(model, self.signature_names)
-            reconstruct_saved_model(graph_def_dict, _saved_model, self.dst)
+            
+            res_graph_def_dict[self.target_signature_name] = quantized_graph_def_dict[self.target_signature_name][0]
+        
             self.first_signature = False
+
+        for target_signature_name in self.signature_names:
+            quantized_graph_def_dict[target_signature_name][0] = res_graph_def_dict[target_signature_name]
+
+        print('Save Quantized model to ', self.dst)
+
+        model = self._adjust_weight(quantized_graph_def_dict)
+
+        graph_def_dict, _saved_model = parse_saved_model(model, self.signature_names)
+        reconstruct_saved_model(graph_def_dict, _saved_model, self.dst)
