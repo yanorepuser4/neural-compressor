@@ -28,7 +28,7 @@ python run_clm_no_trainer.py \
     --quantize \
     --sq \
     --alpha 1.0 \
-    --output_dir "saved_results" \
+    --output_dir "saved_results"
 ```
 applying dynamic quantization to Embedding(Line:336) and test accuracy
 ```
@@ -38,5 +38,6 @@ python run_clm_no_trainer.py \
     --int8 \
     --embdding \
     --output_dir "saved_results" \
+    --tasks  "lambada_openai" \
     --accuracy
 ```
