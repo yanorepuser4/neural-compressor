@@ -53,6 +53,7 @@ parser.add_argument("--tasks", nargs='+', default=["lambada_openai",
     "hellaswag","winogrande","piqa","wikitext"],
     type=str, help="tasks list for accuracy validation")
 parser.add_argument("--peft_model_id", type=str, default=None, help="model_name_or_path of peft model")
+parser.add_argument("--embedding", action="store_true")
 # ============SmoothQuant configs==============
 parser.add_argument("--sq", action="store_true")
 parser.add_argument("--alpha", default="auto", help="Smooth quant parameter.")
@@ -331,6 +332,13 @@ if args.int8 or args.int8_bf16_mixed:
         user_model = load(os.path.abspath(os.path.expanduser(args.output_dir)), user_model, **kwargs)
 else:
     user_model, _ = get_user_model()
+
+# dynamic quantize embeding
+if args.int8 and args.embedding:
+    user_model = torch.ao.quantization.quantize_dynamic(
+    user_model,  # the original model
+    {torch.nn.Embedding},  # a set of layers to dynamically quantize
+    dtype=torch.quint8)
 
 if args.accuracy:
     user_model.eval()
