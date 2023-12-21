@@ -1,14 +1,95 @@
 import tensorflow as tf
 import numpy as np
+import logging
 import time
 import math
 from typing import Optional, Literal
+from dataclasses import dataclass, field
 from itertools import chain
+import transformers
+import datasets
 from transformers.tf_utils import stable_softmax, shape_list, check_embeddings_within_bounds
 from transformers import (
     AutoTokenizer,
+    HfArgumentParser,
+    TFTrainingArguments,
+    TF_MODEL_FOR_CAUSAL_LM_MAPPING,
+    AutoConfig,
+    set_seed,
 )
+from datasets import load_dataset
+from transformers.utils.versions import require_version
 
+logger = logging.getLogger(__name__)
+require_version("datasets>=1.8.0", "To fix: pip install -r benchmarks/language_modeling/tensorflow/gpt_j/requirements.txt")
+MODEL_CONFIG_CLASSES = list(TF_MODEL_FOR_CAUSAL_LM_MAPPING.keys())
+MODEL_TYPES = tuple(conf.model_type for conf in MODEL_CONFIG_CLASSES)
+
+@dataclass
+class ModelArguments:
+    """
+    Arguments pertaining to which model/config/tokenizer we are going to use.
+    """
+
+    model_name_or_path: Optional[str] = field(
+        default="EleutherAI/gpt-j-6B",
+        metadata={
+            "help": (
+                "The model checkpoint for GPT-J weights."
+            )
+        },
+    )
+    config_overrides: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": (
+                "Override some existing default config settings when a model is trained from scratch. Example: "
+                "n_embd=10,resid_pdrop=0.2,scale_attn_weights=false,summary_type=cls_index"
+            )
+        },
+    )
+    checkpoint: Optional[str] = field(
+        default=None,
+        metadata={"help": "Where do you want to store the pretrained models downloaded from huggingface.co"},
+    )
+    use_fast_tokenizer: bool = field(
+        default=True,
+        metadata={"help": "Whether to use one of the fast tokenizer (backed by the tokenizers library) or not."},
+    )
+    precision: Optional[str] = field(
+        default="fp32",
+        metadata={"help": "The precision that we want to run with."},
+    )
+
+
+
+@dataclass
+class DataTrainingArguments:
+    """
+    Arguments pertaining to what data we are going to input our model for evaluation.
+    """
+
+    dataset_name: Optional[str] = field(
+        default="EleutherAI/lambada_openai", metadata={"help": "The name of the dataset to use (via the datasets library)."}
+    )
+    dataset_config_name: Optional[str] = field(
+        default=None, metadata={"help": "The configuration name of the dataset to use (via the datasets library)."}
+    )
+    block_size: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": (
+                "Optional input sequence length after tokenization. "
+                "The training dataset will be truncated in block of this size for training. "
+                "Default to the model max input length for single sentence inputs (take into account special tokens)."
+            )
+        },
+    )
+    preprocessing_num_workers: Optional[int] = field(
+        default=None,
+        metadata={"help": "The number of processes to use for the preprocessing."},
+    )
+    
 def _expand_inputs_for_generation(
         input_ids: Optional[tf.Tensor] = None,
         expand_size: int = 1,
@@ -49,10 +130,8 @@ def _expand_inputs_for_generation(
     
     
 class Inference():
-    def __init__(self, dataset, warmup_steps=1, batch_size=1, steps=1, input_tokens=32, \
-        token_to_generate=32, model_name_or_path="EleutherAI/gpt-j-6B") -> None:
+    def __init__(self, warmup_steps=1, batch_size=1, steps=1, input_tokens=32, token_to_generate=32, data=None) -> None:
         self.dur = []
-        self.dataset = dataset
         self.infer = None
         self.batch_size = batch_size
         self.num_beams = 4
@@ -60,13 +139,13 @@ class Inference():
         self.steps = steps
         self.input_tokens = input_tokens
         self.token_to_generate = token_to_generate
-        self.model_name_or_path = model_name_or_path
+        self.data = data
+        self.correct = 0
     
     def _extract_past_from_model_output(self, outputs):
         past_key_values = None
-        past_key_values_key_name = 'past_key_values' if 'past_key_values' in outputs.keys() else 'output_1'
-        if past_key_values_key_name in outputs:
-            past_key_values = outputs[past_key_values_key_name]
+        if "past_key_values" in outputs:
+            past_key_values = outputs['past_key_values']
         #elif "mems" in outputs:
             #past_key_values = outputs.mems
         #elif "past_buckets_states" in outputs:
@@ -166,20 +245,14 @@ class Inference():
         # define condition fn
     def greedy_search_body_fn(self, generated, finished_sequences, cur_len, model_kwargs):
         """state update fn."""
-        print("generated: ", generated.shape)
-        
         if model_kwargs.get("past_key_values") is None:
             input_ids = generated[:, :cur_len]
         else:
             input_ids = tf.expand_dims(generated[:, cur_len - 1], -1)
-        print("input ids greedy search body: ", input_ids.shape)
         #model_inputs = {'input_ids': input_ids, 'attention_mask': model_kwargs['attention_mask']}
         model_inputs = self.prepare_inputs_for_generation(input_ids, use_cache=True, **model_kwargs)
     
         start = time.time()
-        print("model_inputs")
-        print(input_ids.shape)
-        print(model_kwargs['attention_mask'].shape)
         model_outputs = self.infer(**model_inputs)
         end = time.time()
 
@@ -194,8 +267,8 @@ class Inference():
 
         # argmax
         next_tokens = tf.argmax(next_tokens_scores, axis=-1, output_type=tf.int32)
-        print("next token before")
-        print(next_tokens)
+        #print("next token before")
+        #print(next_tokens)
 
         pad_token_id = 50256
         eos_token_id = [50256]
@@ -212,6 +285,7 @@ class Inference():
         
         # update `generated` and `cur_len`
         update_indices = tf.stack([tf.range(self.batch_size), tf.broadcast_to(cur_len, [self.batch_size])], axis=-1)
+        
         generated = tf.tensor_scatter_nd_update(tensor=generated, indices=update_indices, updates=next_tokens)
         cur_len += 1
         
@@ -232,23 +306,26 @@ class Inference():
         
     def generate(self, data, model):
         #input_ids = tf.convert_to_tensor([data[:-1]], dtype=tf.int32)
+        input_ids = tf.convert_to_tensor([data[:-1]], dtype=tf.int32)
         #4. Define model inputs
-        input_ids = tf.convert_to_tensor(data, dtype=tf.int32)
-        print("input ids : ", input_ids.shape)
+        #input_ids = tf.convert_to_tensor(data, dtype=tf.int32)
+        
         pad_token_id = 50256
-        cur_len = data.shape[-1]
-        #cur_len = len(data)
-        input_ids_padding = tf.ones((self.batch_size, 32), dtype=tf.int32) * (pad_token_id or 0)
+        #cur_len = data.shape[-1]
+        cur_len = len(data) - 1
+        input_ids_padding = tf.ones((self.batch_size, self.token_to_generate), dtype=tf.int32) * (pad_token_id or 0)
         #input_ids_padding = tf.ones((self.batch_size, 1), dtype=tf.int32) * (pad_token_id or 0)
         generated = tf.concat([input_ids, input_ids_padding], axis=-1)
         
-        print("==generated shape: ", generated.shape)
         model_kwargs = {'attention_mask': self.prepare_attention_mask_for_generation(input_ids)}
         #finished_sequences = tf.convert_to_tensor([False])
         finished_sequences = tf.zeros((self.batch_size,), dtype=tf.bool)
         
         self.is_first_iteration = 1
-        loaded_model = tf.saved_model.load(model)
+        if isinstance(model, str):
+            loaded_model = tf.saved_model.load(model)
+        else:
+            loaded_model = model
         self.infer = loaded_model.signatures["serving_first_iteration"]
         # 1st generation step has to be run before to initialize `past_key_values`
         generated, finished_sequences, cur_len, model_kwargs = self.greedy_search_body_fn(
@@ -307,9 +384,8 @@ class Inference():
             return tf.reshape(tensor, shape[:batch_axis] + [-1, num_beams] + shape[batch_axis + 1 :])
             #return tf.reshape(tensor, [self.batch_size, num_beams] + shape[1:])
         
-
+        
         input_ids = tf.convert_to_tensor(data, dtype=tf.int32)
-
         num_return_sequences = 1
         max_length = self.token_to_generate + self.input_tokens
         pad_token_id = 50256
@@ -410,17 +486,13 @@ class Inference():
             model_outputs = self.infer(**model_inputs)
             end = time.time()
             self.dur += [end - start]
-            print("model logit shape")
-            logits_key_name = 'logits' if 'logits' in model_outputs.keys() else 'output_0'
-            past_key_values_key_name = 'past_key_values' if 'past_key_values' in model_outputs.keys() else 'output_1'
-            print(model_outputs[logits_key_name].shape)
             if self.is_first_iteration:
                 running_sequences = tf.tile(running_sequences, [1, self.num_beams, 1])
                 model_kwargs['attention_mask'] = tf.tile(model_kwargs['attention_mask'], [self.num_beams, 1])
-                logits = unflatten_beam_dim(tf.tile(model_outputs[logits_key_name][:, -1], [self.num_beams, 1]), self.num_beams)
-                model_outputs[past_key_values_key_name] = tf.tile(model_outputs[past_key_values_key_name], [1, 1, self.num_beams, 1, 1, 1])
+                logits = unflatten_beam_dim(tf.tile(model_outputs['logits'][:, -1], [self.num_beams, 1]), self.num_beams)
+                model_outputs["past_key_values"] = tf.tile(model_outputs["past_key_values"], [1, 1, self.num_beams, 1, 1, 1])
             else:
-                logits = unflatten_beam_dim(model_outputs[logits_key_name][:, -1], self.num_beams)
+                logits = unflatten_beam_dim(model_outputs['logits'][:, -1], self.num_beams)
             log_probs = tf.nn.log_softmax(logits)
             
             log_probs_processed = log_probs
@@ -526,15 +598,15 @@ class Inference():
             # beam-associated caches.
             cur_len = cur_len + 1
             #TODO: May need to un-comment this to enable k, v cache, batch_axis=cache_batch_axis, cache_batch_axis is 0 for gpt-j
-            print(model_outputs[past_key_values_key_name].shape)
-            if past_key_values_key_name in model_outputs:
+            #print(model_outputs["past_key_values"].shape)
+            if "past_key_values" in model_outputs:
                 cache = tf.nest.map_structure(
                     lambda tensor: unflatten_beam_dim(tensor, self.num_beams, batch_axis=2),
-                    model_outputs[past_key_values_key_name],
+                    model_outputs["past_key_values"],
                 )
                 next_running_indices = self._gather_beams(topk_current_beam_indices, next_topk_indices)
                 next_cache = self._gather_beams(cache, next_running_indices, batch_axis=2)
-                model_outputs[past_key_values_key_name] = tf.nest.map_structure(
+                model_outputs["past_key_values"] = tf.nest.map_structure(
                     lambda tensor: flatten_beam_dim(tensor, batch_axis=2), next_cache
                 )
             
@@ -649,76 +721,56 @@ class Inference():
         return sequences
 
     
-    def evaluate(self, model):
-        #model = tf.saved_model.load(model)
-        #self.infer = model.signatures["serving_default"]
-        #self.infer = model
-        nrows_warmup = self.warmup_steps * self.batch_size
-        nrows_actual = self.steps * self.batch_size 
-        tokenizer = AutoTokenizer.from_pretrained(self.model_name_or_path)
-        for i in range(self.warmup_steps):
-            print('---> Start Warmup iteration {0}'.format(str(i+1)))
+    def evaluate(self, model, model_name_or_path="EleutherAI/gpt-j-6B"):
+        tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
+        for idx, single_data in enumerate(self.data):
             tic = time.time()
-            output = self.beam_search(self.dataset[i*self.batch_size: (i+1)*self.batch_size], model)
-            toc = time.time()
-            print(toc - tic)
-            decoded = tokenizer.batch_decode(output[0], skip_special_tokens=True)
+            print("========Original sentence========")
+            decoded = tokenizer.batch_decode(single_data, skip_special_tokens=True)
             print(decoded)
-            print('---> Stop Warmup iteration {0}'.format(str(i+1)))
-        
-        print("\n\n")
-
-        j = 0
-        total_time = 0.0
-        fgen = 0 #number of first tokens generated
-        wgen = 0 #all tokens generated
-        tgen = 0 #second to last tokens generated
-        for i in range(self.warmup_steps, self.steps + self.warmup_steps):
-            print('---> Start iteration {0}'.format(str(j+1)))
-            tic = time.time()
-            output = self.beam_search(self.dataset[i*self.batch_size: (i+1)*self.batch_size], model)
+            #output = self.beam_search(mydata[i*self.batch_size: (i+1)*self.batch_size], model)
+            output = self.generate(single_data, model)
             toc = time.time()
-            print(toc - tic)
             decoded = tokenizer.batch_decode(output[0], skip_special_tokens=True)
+            print("=========Decoded sentence====")
             print(decoded)
-            print('---> Stop iteration {0}'.format(str(j+1)))
-            total_time += toc - tic
-            wgen += (output.shape[1] - self.input_tokens) * output.shape[0]
-            tgen += (output.shape[1] - self.input_tokens - 1) * output.shape[0]
-            fgen += output.shape[0]
-            print("{} / {} Done".format((j+1)*self.batch_size, self.dataset[nrows_warmup:].shape[0]))
-            j+=1
+            if idx >= 5: break
+
+if __name__ == "__main__":
+    parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TFTrainingArguments))
+    model_args, data_args, run_args = parser.parse_args_into_dataclasses()
+
+    logger.setLevel(logging.INFO)
+    datasets.utils.logging.set_verbosity_warning()
+    transformers.utils.logging.set_verbosity_info()
+
+    if run_args.seed is not None:
+        set_seed(run_args.seed)
+
+    raw_datasets = load_dataset(
+            data_args.dataset_name,
+            data_args.dataset_config_name,
+            cache_dir=model_args.checkpoint,
+            use_auth_token=None,
+        )
         
+
+    tokenizer = AutoTokenizer.from_pretrained("EleutherAI/gpt-j-6B")
+
+    raw_datasets = load_dataset(
+                data_args.dataset_name,
+                data_args.dataset_config_name,
+                cache_dir=model_args.checkpoint,
+                use_auth_token=None,
+            )
+            
         
-        self.dur = self.dur[self.warmup_steps*self.token_to_generate:] #remove warm up data
-        self.dur = [self.dur[i:i + self.token_to_generate] for i in range(0, len(self.dur), self.token_to_generate)]
+    config = AutoConfig.from_pretrained(model_args.model_name_or_path)
+    tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
+    column_names = raw_datasets["test"].column_names
+    text_column_name = "text" if "text" in column_names else column_names[0]
 
-        print("\n", "-" * 10, "Summary:", "-" * 10)
-        tpi = total_time / (self.steps)
-
-        first_latency = np.mean([x[0] for x in self.dur])
-        first_total = np.sum([x[0] for x in self.dur])
-        average_2n = list(chain(*[x[1:] for x in self.dur]))
-        average_2n.sort()
-
-        average_2n_batch = np.mean(average_2n)
-        rt = np.sum(average_2n)
-        average_2n_latency = rt / tgen
-
-        if self.batch_size == 1:
-            print("Inference latency: %.5f sec." % tpi)
-            print("First token average latency: %.5f sec." % first_latency)
-            print("Rest tokens average latency: %.5f sec." % average_2n_latency)
-        else:
-            print("Average time spent per iteration (batch size = %i): %.5f sec." % (self.batch_size, tpi))
-            print("Average time spent to process the first token (batch size = %i): %.5f sec." % (self.batch_size, first_latency))
-            print("Average time spent to process 2 to rest tokens together (batch size = %i): %.5f sec." % (self.batch_size, average_2n_batch))
-        print("\n\n")
-        
-        throughput = tgen / rt
-        tpwhole = wgen / total_time
-        tpfirst = fgen / first_total
-        print("Inference generation throughput (first token) (tokens / sec): %.3f" % tpfirst)
-        print("Inference generation throughput (2 to rest) (tokens / sec): %.3f" % throughput)
-        print("\n")
-        print("Inference generation throughput (tokens / sec): %.3f" % tpwhole)
+    mydata = tokenizer(raw_datasets["test"][text_column_name], return_tensors="np").input_ids
+    gpt_j_model_path = "/home/dataset_broad/dataset/users/zehaohua/gpt-j-6B-2-signatures-first-second-iter"
+    infer = Inference(data=mydata, input_tokens=len(mydata[0]) - 1)
+    infer.evaluate(gpt_j_model_path)

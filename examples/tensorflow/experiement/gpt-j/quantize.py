@@ -124,27 +124,23 @@ nrows_actual = steps * batch_size
 nrows = nrows_warmup + nrows_actual
 
 
-rdata = ["Once upon a time, there existed a little girl, who liked to have adventures. She wanted to go to places and meet new people, and have fun."] 
-rdata = rdata * nrows
-mydata = tokenizer(rdata, return_tensors="tf").input_ids
+config = AutoConfig.from_pretrained(model_args.model_name_or_path)
+tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
+column_names = raw_datasets["test"].column_names
+text_column_name = "text" if "text" in column_names else column_names[0]
 
-# config = AutoConfig.from_pretrained(model_args.model_name_or_path)
-# tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
-# column_names = raw_datasets["test"].column_names
-# text_column_name = "text" if "text" in column_names else column_names[0]
+mydata = tokenizer(raw_datasets["test"][text_column_name], return_tensors="np").input_ids
 
-# mydata = tokenizer(raw_datasets["test"][text_column_name], return_tensors="np").input_ids
+marg = {}
+stacked = np.concatenate(mydata)
+unique, counts = np.unique(stacked, return_counts=True)
+counts = counts / np.sum(counts)
 
-# marg = {}
-# stacked = np.concatenate(mydata)
-# unique, counts = np.unique(stacked, return_counts=True)
-# counts = counts / np.sum(counts)
-
-# marg = dict(zip(unique, counts))
-# marg = defaultdict(lambda: 0, marg)
+marg = dict(zip(unique, counts))
+marg = defaultdict(lambda: 0, marg)
 
 
-infer = Inference(dataset = mydata)
+infer = Inference(data=mydata, input_tokens=len(mydata[0]) - 1)
 
 def main():    
     with run_args.strategy.scope():
