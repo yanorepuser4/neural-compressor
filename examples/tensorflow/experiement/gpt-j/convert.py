@@ -51,7 +51,7 @@ from neural_compressor.adaptor.tf_utils.graph_rewriter.qdq.merge_duplicated_qdq 
 
 class ConvertSavedModel():
     def __init__(self, src='./gpt-j-6B', dst='./converted_gpt-j-6B', evaluate=None,
-                        op_wise_config={}, int8_sequences={}, signature_names=["serving_default"]):
+                        op_wise_config={}, int8_sequences={}, signature_names=["serving_default"], apply_smooth_quant=True):
         self.src = src
         self.dst = dst
         self.fp32_ops = []
@@ -68,7 +68,8 @@ class ConvertSavedModel():
         self.int8_sequences = int8_sequences
         self.weight_tensor_minmax_dict = {}
         self.signature_names = signature_names
-        self.tmp_path = './intermediate_saved_model'
+        self.apply_smooth_quant = apply_smooth_quant
+        self.tmp_path = '/home/dataset_broad/dataset/users/zehaohua/intermediate_saved_model'
 
     def inc_preoptimize(self, graph_def):
         from neural_compressor import Model
@@ -114,6 +115,8 @@ class ConvertSavedModel():
         from utils import weight_name_mapping
         reconstruct_saved_model(graph_def_dict, self._saved_model, self.tmp_path)
         model = load.load(self.tmp_path, [tag_constants.SERVING])
+        if not self.apply_smooth_quant:
+            return model
 
         for idx, weight_tensor in enumerate(model.variables):
             parsed_weight_name = weight_name_mapping(weight_tensor.name)
@@ -339,7 +342,10 @@ class ConvertSavedModel():
         for target_signature_name in self.signature_names:
             self.target_signature_name = target_signature_name
 
-            sq_graph_def_dict = self.smooth_quant(self.src)
+            if self.apply_smooth_quant:
+                sq_graph_def_dict = self.smooth_quant(self.src)
+            else:
+                sq_graph_def_dict, self._saved_model = parse_saved_model(self.model, self.signature_names)
 
             sq_graph_def = sq_graph_def_dict[self.target_signature_name][0]
             f=tf.io.gfile.GFile('sq_graph_def.pb','wb')

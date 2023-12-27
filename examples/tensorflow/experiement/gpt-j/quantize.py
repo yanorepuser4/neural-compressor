@@ -153,7 +153,8 @@ def main():
                                       evaluate=infer.evaluate,
                                       op_wise_config=op_wise_config,
                                       int8_sequences=int8_sequences,
-                                      signature_names=["serving_first_iteration", "serving_default"])
+                                      signature_names=["serving_first_iteration", "serving_default"],
+                                      apply_smooth_quant=True)
                                     
         converter()
 
