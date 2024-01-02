@@ -2,52 +2,26 @@ import os
 import copy
 import numpy as np
 import tensorflow as tf
-from tensorflow.python.eager import context
 from tensorflow.python.saved_model import load
 from tensorflow.python.saved_model import tag_constants
-from tensorflow.python.saved_model import signature_constants
-from tensorflow.python.training import saver
-from tensorflow.core.protobuf import config_pb2
-from tensorflow.core.framework import graph_pb2
-from tensorflow.python.grappler import tf_optimizer
-from tensorflow.core.protobuf import meta_graph_pb2
-from tensorflow.python.eager import context
-from tensorflow.python.saved_model import signature_constants
-from tensorflow.python.saved_model import tag_constants
-from tensorflow.python.saved_model import signature_constants
-from tensorflow.python.saved_model import tag_constants
-from tensorflow.python.training import saver
-from tensorflow.core.framework import variable_pb2
-from tensorflow.python.eager import wrap_function
-from tensorflow.python.util import nest
-from tensorflow.python.saved_model import save
-from utils import parse_saved_model, reconstruct_saved_model
 
-from neural_compressor.adaptor.tf_utils.transform_graph.rerange_quantized_concat import RerangeQuantizedConcat
-from neural_compressor.adaptor.tf_utils.transform_graph.bias_correction import BiasCorrection
+from utils import parse_saved_model, reconstruct_saved_model, weight_name_mapping
+
+from neural_compressor.adaptor.tf_utils.quantize_graph_common import QuantizeGraphHelper
 from neural_compressor.adaptor.tf_utils.graph_rewriter.generic.remove_training_nodes import RemoveTrainingNodesOptimizer
 from neural_compressor.adaptor.tf_utils.graph_rewriter.generic.strip_unused_nodes import StripUnusedNodesOptimizer
 from neural_compressor.adaptor.tf_utils.graph_rewriter.generic.fold_batch_norm import FoldBatchNormNodesOptimizer
-from neural_compressor.adaptor.tf_utils.graph_rewriter.generic.fuse_pad_with_conv import FusePadWithConv2DOptimizer
 from neural_compressor.adaptor.tf_utils.graph_rewriter.generic.strip_equivalent_nodes import StripEquivalentNodesOptimizer
-from neural_compressor.adaptor.tf_utils.graph_rewriter.generic.fuse_pad_with_fp32_conv import FusePadWithFP32Conv2DOptimizer
 from neural_compressor.adaptor.tf_utils.graph_rewriter.int8.freeze_value import FreezeValueTransformer
 from neural_compressor.adaptor.tf_utils.graph_rewriter.int8.freeze_fake_quant import FreezeFakeQuantOpOptimizer
 from neural_compressor.adaptor.tf_utils.graph_rewriter.int8.fuse_conv_requantize import FuseConvRequantizeTransformer
-from neural_compressor.adaptor.tf_utils.graph_rewriter.int8.fuse_matmul_requantize import FuseMatMulRequantizeTransformer
-from neural_compressor.adaptor.tf_utils.graph_rewriter.int8.fuse_matmul_requantize import FuseMatMulRequantizeDequantizeTransformer
 from neural_compressor.adaptor.tf_utils.graph_rewriter.int8.fuse_matmul_requantize import FuseMatMulRequantizeNewAPITransformer
 from neural_compressor.adaptor.tf_utils.graph_rewriter.int8.fuse_matmul_requantize import FuseMatMulRequantizeDequantizeNewAPITransformer
-from neural_compressor.adaptor.tf_utils.graph_rewriter.int8.fuse_conv_redundant_dequantize import FuseConvRedundantDequantizeTransformer
 from neural_compressor.adaptor.tf_utils.graph_rewriter.int8.fuse_matmul_redundant_dequantize import FuseMatMulRedundantDequantizeTransformer
-from neural_compressor.adaptor.tf_utils.graph_rewriter.int8.scale_propagation import ScaleProPagationTransformer
-from neural_compressor.adaptor.tf_utils.graph_rewriter.bf16.bf16_convert import BF16Convert
 from neural_compressor.adaptor.tf_utils.graph_rewriter.int8.post_quantized_op_cse import PostCseOptimizer
 from neural_compressor.adaptor.tf_utils.graph_rewriter.int8.post_hostconst_converter import PostHostConstConverter
 from neural_compressor.adaptor.tf_utils.graph_rewriter.int8.meta_op_optimizer import MetaInfoChangingMemOpOptimizer
-from neural_compressor.adaptor.tf_utils.graph_rewriter.qdq.insert_qdq_pattern import GenerateGraphWithQDQPattern
-from neural_compressor.adaptor.tf_utils.graph_rewriter.qdq.share_qdq_y_pattern import ShareQDQForItexYPatternOptimizer
-from neural_compressor.adaptor.tf_utils.graph_rewriter.qdq.merge_duplicated_qdq import MergeDuplicatedQDQOptimizer
+
 
 class ConvertSavedModel():
     def __init__(self, src='./gpt-j-6B', dst='./converted_gpt-j-6B', evaluate=None,
@@ -103,6 +77,28 @@ class ConvertSavedModel():
                         matched_add_nodes.append((i,))
         return matched_add_nodes
 
+    def _get_weight_min_max(self, graph_def, model):
+        sq_weight_node_names = {}
+        sorted_graph = QuantizeGraphHelper().get_sorted_graph(
+            graph_def,
+            ['attention_mask', 'input_ids'],
+            ['Identity', 'Identity_1'],)
+
+        for node in sorted_graph.node:
+            if node.op not in ['MatMul', 'Conv2D']:
+                continue
+            # Fix retval already been set issue
+            if 'while' in node.input[0]: # pragma: no cover
+                continue
+            sq_weight_node_names[node.input[1]] = node.name
+
+        for idx, weight_tensor in enumerate(model.variables):
+            parsed_weight_name = weight_name_mapping(weight_tensor.name)
+            if parsed_weight_name in sq_weight_node_names:
+                if parsed_weight_name not in self.weight_tensor_minmax_dict:
+                    self.weight_tensor_minmax_dict[parsed_weight_name] = [np.min(weight_tensor), np.max(weight_tensor)]
+        
+
     def _adjust_weight(self, graph_def_dict):
         """In-place adjust weight by scale.
 
@@ -112,10 +108,12 @@ class ConvertSavedModel():
             original_weight: numpy value of the original const weight node
         """
         # scale: (ic,)
-        from utils import weight_name_mapping
         reconstruct_saved_model(graph_def_dict, self._saved_model, self.tmp_path)
         model = load.load(self.tmp_path, [tag_constants.SERVING])
         if not self.apply_smooth_quant:
+            """Generate the calibration data."""
+            if not self.weight_tensor_minmax_dict:
+                self._get_weight_min_max(graph_def_dict[self.target_signature_name][0], model)
             return model
 
         for idx, weight_tensor in enumerate(model.variables):
@@ -345,7 +343,7 @@ class ConvertSavedModel():
             if self.apply_smooth_quant:
                 sq_graph_def_dict = self.smooth_quant(self.src)
             else:
-                sq_graph_def_dict, self._saved_model = parse_saved_model(self.model, self.signature_names)
+                sq_graph_def_dict, self._saved_model = parse_saved_model(self.src, self.signature_names)
 
             sq_graph_def = sq_graph_def_dict[self.target_signature_name][0]
             f=tf.io.gfile.GFile('sq_graph_def.pb','wb')
