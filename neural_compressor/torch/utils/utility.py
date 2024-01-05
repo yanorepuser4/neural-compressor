@@ -120,6 +120,24 @@ def get_double_quant_config(double_quant_type, weight_sym=True):
     DOUBLE_QUANT_CONFIGS[double_quant_type]["weight_sym"] = weight_sym
     return DOUBLE_QUANT_CONFIGS[double_quant_type]
 
+def get_mixed_quant_config(mixed_quant_type, model_type="llama"):
+    from neural_compressor.torch.utils.constants import MIXED_QUANT_CONFIGS, OP_NAME_MAPPING, DOUBLE_QUANT_CONFIGS
+
+    assert mixed_quant_type in MIXED_QUANT_CONFIGS, "Supported mixed quant configs: {}".format(
+        list(MIXED_QUANT_CONFIGS.keys())
+    )
+    model_type = model_type.upper()
+    assert model_type in OP_NAME_MAPPING, "Supported model with mixed precision quantization: {}, but got '{}'!".format(
+        list(key.lower() for key in OP_NAME_MAPPING.keys()), model_type.lower()
+    )
+    quant_config = {"global": DOUBLE_QUANT_CONFIGS[MIXED_QUANT_CONFIGS[mixed_quant_type]["global"]]}
+    if "local" in MIXED_QUANT_CONFIGS[mixed_quant_type]:
+        local_dict = {OP_NAME_MAPPING[model_type][k] if k in OP_NAME_MAPPING[model_type] \
+            else k: v for k, v in MIXED_QUANT_CONFIGS[mixed_quant_type]["local"].items()}        
+        local_config = {k: DOUBLE_QUANT_CONFIGS[v] if v in DOUBLE_QUANT_CONFIGS \
+            else v for k, v in local_dict.items()}
+        quant_config["local"] = local_config
+    return quant_config
 
 # pylint:disable=import-error
 try:

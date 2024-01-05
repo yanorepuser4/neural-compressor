@@ -66,7 +66,9 @@ parser.add_argument("--woq_scheme", default="sym")
 parser.add_argument("--woq_enable_mse_search", action="store_true")
 parser.add_argument("--woq_enable_full_range", action="store_true")
 parser.add_argument("--woq_dtype", type=str, default="int")
-parser.add_argument("--woq_mixed_precision", type=int, default=None)
+parser.add_argument("--woq_mixed_type", type=str, default=None,
+                    choices=["LLAMA_FTYPE_MOSTLY_Q2_K", "LLAMA_FTYPE_MOSTLY_Q3_K_S", "LLAMA_FTYPE_MOSTLY_Q3_K_M",
+                             "LLAMA_FTYPE_MOSTLY_Q3_K_L","LLAMA_FTYPE_MOSTLY_Q4_K_S"])
 # =============GPTQ configs====================
 parser.add_argument("--gptq_actorder", action="store_true",
                     help="Whether to apply the activation order GPTQ heuristic.")
@@ -232,7 +234,7 @@ if args.quantize:
     # 3.x api
     if args.approach == 'weight_only':
         from neural_compressor.torch import RTNWeightQuantConfig, GPTQConfig, quantize
-        from neural_compressor.torch.utils.utility import get_double_quant_config
+        from neural_compressor.torch.utils.utility import get_double_quant_config, get_mixed_quant_config
         weight_sym = True if args.woq_scheme == "sym" else False
         double_quant_config_dict = get_double_quant_config(args.double_quant_type, weight_sym=weight_sym)
         
@@ -245,6 +247,15 @@ if args.quantize:
                     }
                 )
                 quant_config = RTNWeightQuantConfig.from_dict(double_quant_config_dict)
+            elif args.woq_mixed_type:
+                mixed_quant_config_dict = get_mixed_quant_config(args.woq_mixed_type, user_model.config.model_type)
+                mixed_quant_config_dict.update(
+                    {
+                        "enable_full_range": args.woq_enable_full_range,
+                        "enable_mse_search": args.woq_enable_mse_search,
+                    }
+                )
+                quant_config = RTNWeightQuantConfig.from_dict(mixed_quant_config_dict)
             else:
                 quant_config = RTNWeightQuantConfig(
                     weight_dtype=args.woq_dtype,
@@ -259,21 +270,6 @@ if args.quantize:
                     double_quant_group_size=args.double_quant_group_size,
                 )
             quant_config.set_local("lm_head", RTNWeightQuantConfig(weight_dtype="fp32"))
-            if args.woq_mixed_precision is not None:
-                mixed_config = RTNWeightQuantConfig(
-                    weight_dtype=args.woq_dtype,
-                    weight_bits=args.woq_mixed_precision,
-                    weight_group_size=args.woq_group_size,
-                    weight_sym=weight_sym,
-                    enable_full_range = args.woq_enable_full_range,
-                    enable_mse_search = args.woq_enable_mse_search,
-                    double_quant_bits=args.double_quant_bits,
-                    double_quant_dtype=args.double_quant_dtype,
-                    double_quant_sym=args.double_quant_sym,
-                    double_quant_group_size=args.double_quant_group_size,
-                )
-                # quant_config.set_local(".*fc.*", mixed_config)
-                quant_config.set_local(".*mlp.*", mixed_config)
             user_model = quantize(
                 model=user_model, quant_config=quant_config
             )
@@ -333,26 +329,6 @@ if args.quantize:
                     double_quant_group_size=args.double_quant_group_size,
                 )
             quant_config.set_local("lm_head", GPTQConfig(weight_dtype="fp32"))
-            if args.woq_mixed_precision is not None:
-                mixed_config = GPTQConfig(
-                        weight_dtype=args.woq_dtype,
-                        weight_bits=args.woq_mixed_precision,
-                        weight_group_size=args.woq_group_size,
-                        weight_sym=weight_sym,
-                        dataloader_len=len(dataloader_for_calibration),
-                        percdamp=args.gptq_percdamp,
-                        act_order=args.gptq_actorder,
-                        block_size=args.gptq_block_size,
-                        nsamples=args.gptq_nsamples,
-                        use_max_length=args.gptq_use_max_length,
-                        pad_max_length=args.gptq_pad_max_length,
-                        double_quant_bits=args.double_quant_bits,
-                        double_quant_dtype=args.double_quant_dtype,
-                        double_quant_sym=args.double_quant_sym,
-                        double_quant_group_size=args.double_quant_group_size,
-                    )
-                # quant_config.set_local(".*fc.*", mixed_config)
-                quant_config.set_local(".*mlp.*", mixed_config)
 
             user_model = quantize(
                 model=user_model, quant_config=quant_config, run_fn=run_fn_for_gptq, run_args=dataloader_for_calibration
