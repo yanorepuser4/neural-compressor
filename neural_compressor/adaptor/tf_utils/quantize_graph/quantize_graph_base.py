@@ -276,6 +276,8 @@ class QuantizeNodeBase:
             "FusedBatchNormV3",
             "Requantize",
             "RequantizePerChannel",
+            "Reshape", 
+            "Transpose",
             "AvgPool",
             "Pad",
             "CropAndResize",

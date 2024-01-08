@@ -659,6 +659,7 @@ class FuseMatMulRequantizeNewAPITransformer(GraphRewriterBase):
 
             new_node.op = quantized_node_op
             new_node.name = requantize_node_name
+
             for _, value in enumerate(quantized_node.input):
                 new_node.input.append(value)
             new_node.input.append(requested_output_min_name)
@@ -701,8 +702,22 @@ class FuseMatMulRequantizeNewAPITransformer(GraphRewriterBase):
             if "BiasAdd" in attr_fused_ops:
                 bias_node = self.graph_info[new_node.input[2]].node
             if not last_node.op == "QuantizedConcatV2":
-                max_input_node = self.graph_info[last_node.input[-1]].node
-                min_input_node = self.graph_info[last_node.input[-2]].node
+                name = ""
+                index = -1
+                cur_node = last_node
+                while ":" in cur_node.input[int(index)]:
+                    [name, index] = cur_node.input[-1].split(":")
+                    cur_node = self.graph_info[name].node
+                    if "MatMul" in cur_node.op:
+                        index = -1
+
+                max_input_name = last_node.input[-1] if not name else cur_node.input[int(index)]
+                min_input_name = last_node.input[-1] if not name else cur_node.input[int(index)-1]
+                try:
+                    max_input_node = self.graph_info[max_input_name].node
+                    min_input_node = self.graph_info[min_input_name].node
+                except:
+                    breakpoint()
 
             if not last_node.op == "QuantizedConcatV2" and max_input_node.op == "Enter":  # pragma: no cover
                 min_input_parent_name = Helper.node_name_from_input(min_input_node.input[0])
@@ -743,6 +758,7 @@ class FuseMatMulRequantizeNewAPITransformer(GraphRewriterBase):
                     continue
                 bias_node = bias_parent_node
 
+            deq_type = None
             if bias_node and (
                 last_node.op.find("_QuantizedMatMul") != -1
                 or last_node.op.find("QuantizeV2") != -1
@@ -814,7 +830,11 @@ class FuseMatMulRequantizeNewAPITransformer(GraphRewriterBase):
 
                 deq_node_name = self.graph_info[requantize_node_name].outputs[0]
                 deq_node = self.graph_info[deq_node_name].node
-                deq_node.attr["T"].CopyFrom(attr_value_pb2.AttrValue(type=uint8_type))
+                
+                if deq_node.op == "Dequantize":
+                    deq_node.attr["T"].CopyFrom(attr_value_pb2.AttrValue(type=uint8_type))
+                else:
+                    deq_type = deq_node.attr["T"].type
 
                 Helper.set_attr_type_list(
                     new_node,
@@ -835,7 +855,12 @@ class FuseMatMulRequantizeNewAPITransformer(GraphRewriterBase):
                 new_node.attr["Tbias"].CopyFrom(attr_value_pb2.AttrValue(type=float32_type))
                 deq_node_name = self.graph_info[requantize_node_name].outputs[0]
                 deq_node = self.graph_info[deq_node_name].node
-                deq_node.attr["T"].CopyFrom(attr_value_pb2.AttrValue(type=uint8_type))
+                
+                if deq_node.op == "Dequantize":
+                    deq_node.attr["T"].CopyFrom(attr_value_pb2.AttrValue(type=uint8_type))
+                else:
+                    deq_type = deq_node.attr["T"].type
+
                 if bias_node:
                     Helper.set_attr_type_list(
                         new_node,
@@ -868,7 +893,10 @@ class FuseMatMulRequantizeNewAPITransformer(GraphRewriterBase):
                         ],
                     )
 
-            Helper.set_attr_type_list(new_node, "Thost_outputs", [uint8_type, float32_type, float32_type])
+
+            deq_type = uint8_type if deq_type is None else deq_type
+            new_node.attr["Tout"].CopyFrom(attr_value_pb2.AttrValue(type=deq_type))
+            Helper.set_attr_type_list(new_node, "Thost_outputs", [deq_type, float32_type, float32_type])
 
             if "GeluApproximate" in attr_fused_ops:
                 Helper.set_attr_string_list(new_node, "fused_ops", [b"BiasAdd", b"GeluApproximate", b"Requantize"])
@@ -890,7 +918,6 @@ class FuseMatMulRequantizeNewAPITransformer(GraphRewriterBase):
                 Helper.set_attr_string_list(new_node, "fused_ops", [b"BiasAdd", b"Requantize"])
             else:
                 Helper.set_attr_string_list(new_node, "fused_ops", [b"Requantize"])
-            new_node.attr["Tout"].CopyFrom(attr_value_pb2.AttrValue(type=uint8_type))
 
             self.graph_analyzer.replace_single_node(
                 new_node,

@@ -34,7 +34,7 @@
           "Relu6Grad","ReluGrad","Reshape","ResizeNearestNeighbor","ResizeNearestNeighborGrad", "ResizeBilinear", "Reverse","ReverseSequence",
           "ReverseV2","Round", "Select","SelectV2","Shape","ShapeN","Sign","Slice","Snapshot","SpaceToBatch","SpaceToBatchND","SpaceToDepth",
           "Split","SplitV","Squeeze","StopGradient","StridedSlice","StridedSliceGrad","Switch","Tile","TopK","TopKV2","Transpose",
-          "Where","Unpack","ZerosLike" #clear list
+          "Where","Unpack","ZerosLike", Gelu #clear list
           ]
   fp32: ['*'] # '*' means all op types
   int8: {
@@ -133,6 +133,8 @@
                       'granularity': ['per_tensor']
                       }
                   },
+        'Reshape': *ref_default_static,
+        'Transpose': *ref_default_static,
         'ConcatV2': *ref_default_static,
         'FusedBatchNorm': *ref_default_static,
         'FusedBatchNormV2': *ref_default_static,

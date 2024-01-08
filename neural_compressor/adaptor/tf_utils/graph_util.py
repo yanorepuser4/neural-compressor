@@ -93,6 +93,8 @@ class GraphAnalyzer:
             "MaxPool",
             "MaxPool3D",
             "Requantize",
+            "Reshape",
+            "Transpose",
             "AvgPool",
             "Pad",
             "CropAndResize",

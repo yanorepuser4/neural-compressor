@@ -30,7 +30,8 @@ from .fuse_qdq_deconv import FuseNodeStartWithDeconv2d
 from .fuse_qdq_in import FuseNodeStartWithFusedInstanceNorm
 from .fuse_qdq_matmul import FuseNodeStartWithMatmul
 from .fuse_qdq_pooling import FuseNodeStartWithPooling
-
+from .fuse_qdq_reshape import FuseNodeStartWithReshape
+from .fuse_qdq_transpose import FuseNodeStartWithTranspose
 
 class OptimizeQDQGraph(QuantizeGraphBase):
     """Apply the fusion DQ + OP + Q pattern."""
@@ -83,6 +84,8 @@ class OptimizeQDQGraph(QuantizeGraphBase):
         self.register_transformer("_MklFusedInstanceNorm", FuseNodeStartWithFusedInstanceNorm)
         self.register_transformer("AvgPool", FuseNodeStartWithPooling)
         self.register_transformer("ConcatV2", FuseNodeStartWithConcatV2)
+        self.register_transformer("Reshape", FuseNodeStartWithReshape)
+        self.register_transformer("Transpose", FuseNodeStartWithTranspose)
         self.register_transformer("MatMul", FuseNodeStartWithMatmul)
         self.register_transformer("BatchMatMul", FuseNodeStartWithMatmul)
         self.register_transformer("BatchMatMulV2", FuseNodeStartWithMatmul)
@@ -119,7 +122,7 @@ class OptimizeQDQGraph(QuantizeGraphBase):
                         quantizable_nodes.pop()
                     if quantizable_nodes[0] == "Dequantize":
                         quantizable_nodes.pop(0)
-                    if node.op in ("ConcatV2", "MaxPool", "MaxPool3D", "AvgPool"):
+                    if node.op in ("ConcatV2", "MaxPool", "MaxPool3D", "AvgPool", "Reshape", "Transpose"):
                         self.all_quantizable_node.extend([[i] for i in quantizable_nodes])
                     else:
                         self.all_quantizable_node.append(quantizable_nodes)

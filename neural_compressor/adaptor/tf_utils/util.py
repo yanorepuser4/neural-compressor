@@ -534,7 +534,7 @@ def tf_diagnosis_helper(fp32_model, quan_model, tune_cfg, save_path):
         fp32_node_mapping[node.name] = node
     for node in quan_model.graph_def.node:
         qnode_mapping[node.name] = node
-    supported_op_lst = set(["Conv2D", "MatMul", "ConcatV2", "MaxPool", "AvgPool", "DepthwiseConv2dNative"])
+    supported_op_lst = set(["Conv2D", "MatMul", "ConcatV2", "Reshape", "Transpose", "MaxPool", "AvgPool", "DepthwiseConv2dNative"])
     fp32_node_lst = set()
     for node in fp32_model.graph_def.node:
         if node.op in supported_op_lst:
