@@ -166,16 +166,17 @@ class SmoothQuantScalerLLM(SmoothQuantScaler):
         op_types:
     """
 
-    def __init__(self, graph_def, alpha, scales_per_op, op_types):
+    def __init__(self, model, alpha, scales_per_op, op_types):
         """Initialization."""
-        self.graph_def = graph_def
+        self.model = model
         self.alpha = alpha
         self.scales_per_op = scales_per_op
         self.op_types = op_types
-
-        self.graph_info = None
         self.mul_list = []
         self.sq_weight_scale_dict = {}
+        self.g_analyzer = GraphAnalyzer()
+        self.g_analyzer.graph = self.model.graph_def
+        self.graph_info = self.g_analyzer.parse_graph()
 
     def _parse_weight_dict(self, max_vals_per_channel, sq_weight_tensor_dict):
         """Parse weight related dictionaries to two required dictionaries.
@@ -215,9 +216,6 @@ class SmoothQuantScalerLLM(SmoothQuantScaler):
             sq_weight_tensor_dict (dict): A dictionary whose structure is like {input_node_name: weight_tensor}.
             sq_target_node_names (dict): A dictionary whose structure is like {weight_node_name: target_node_name}.
         """
-        self.g_analyzer = GraphAnalyzer()
-        self.g_analyzer.graph = self.graph_def
-        self.graph_info = self.g_analyzer.parse_graph()
         sq_weight_tensors, sq_weight_node_names = self._parse_weight_dict(max_vals_per_channel, sq_weight_tensor_dict)
         logger.info("Start scaling on model graph for Smooth Quantization.")
         if self.scales_per_op:
@@ -264,5 +262,7 @@ class SmoothQuantScalerLLM(SmoothQuantScaler):
         else:
             pass
         sq_graph_def = self.g_analyzer.dump_graph()
-        sq_graph_def.library.CopyFrom(self.graph_def.library)
-        return sq_graph_def, self.sq_weight_scale_dict, self.mul_list
+        sq_graph_def.library.CopyFrom(self.model.graph_def.library)
+        self.model.graph_def = sq_graph_def
+        self.model.sq_weight_scale_dict = self.sq_weight_scale_dict
+        return self.model, self.mul_list

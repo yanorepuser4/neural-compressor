@@ -1910,7 +1910,7 @@ class TensorFlowAdaptor(Adaptor):
         alpha=0.5,
         folding=False,
         percentile=99.999,
-        op_types=["MatMul", "Conv2D"],
+        op_types=["MatMul"],
         scales_per_op=True,
     ):
         """Convert the model by smooth quant.
@@ -1929,42 +1929,21 @@ class TensorFlowAdaptor(Adaptor):
         Returns:
             model: A smoothed Tensorflow model.
         """
-        # Do a pre-optimization before smooth quant
-        from .tf_utils.graph_rewriter.generic.pre_optimize import PreOptimization
-
-        self.pre_optimizer_handle = PreOptimization(model, self.new_api, self.device)
-        self.pre_optimized_model = self.pre_optimizer_handle.get_optimized_model(self.itex_mode)
-        model.graph_def = self.pre_optimized_model.graph_def
-
         # only support per-tensor MatMul now
-        op_types = ["MatMul"]
-        llm_temp_dir = self.work_dir + "/temp_saved_model"
+        model.model_path = self.work_dir + "/temp_saved_model"
         # Run calibration to get max values per channel
         from .tf_utils.smooth_quant_calibration import SmoothQuantCalibrationLLM
 
-        calibration = SmoothQuantCalibrationLLM(
-            model._model,
-            dataloader,
-            calib_iter,
-            op_types,
-            percentile,
-            llm_temp_dir,
-            model.weight_name_mapping,
-        )
-        max_vals_per_channel, sq_target_node_names, sq_weight_tensor_dict, sq_graph_def = calibration(
-            model.input_node_names, model.output_node_names
-        )
+        calibration = SmoothQuantCalibrationLLM(model, dataloader, calib_iter, op_types, percentile)
+        max_vals_per_channel, sq_target_node_names, sq_weight_tensor_dict = calibration()
 
         # Calculate the smooth quant scaler and insert Mul op into the graph
         from .tf_utils.smooth_quant_scaler import SmoothQuantScalerLLM
 
-        scaler = SmoothQuantScalerLLM(sq_graph_def, alpha, scales_per_op, op_types)
-        sq_graph_def, sq_weight_scale_dict, mul_list = scaler.transform(
+        scaler = SmoothQuantScalerLLM(model, alpha, scales_per_op, op_types)
+        model, mul_list = scaler.transform(
             max_vals_per_channel, sq_weight_tensor_dict, sq_target_node_names
         )
-        model.graph_def = sq_graph_def
-        model.model_path = llm_temp_dir
-        model.sq_weight_scale_dict = sq_weight_scale_dict
         self.smooth_quant_mul_ops.extend(mul_list)
         self.smooth_quant_model = model
         return self.smooth_quant_model

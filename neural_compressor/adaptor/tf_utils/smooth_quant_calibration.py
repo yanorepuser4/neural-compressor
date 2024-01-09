@@ -242,23 +242,15 @@ class SmoothQuantCalibrationLLM(SmoothQuantCalibration):
         op_types (List[str]): The types of operations to be quantized.
         percentile (float): The percentile of calibration to remove outliers.
         eval_func (function):  The function to inference the model.
-        temp_path (str): The temporary path to store median model.
-        weight_name_mapping (): A function that convert weight tensor name in autotrackable to node name in graph_def
     """
 
-    def __init__(self, model_path, dataloader, iterations, op_types, percentile, temp_path, weight_name_mapping):
+    def __init__(self, model, dataloader, iterations, op_types, percentile):
         """Initializes a SmoothQuantCalibrationLLM object."""
-        self.func = None
-        self.graph_def = None
-        self.frozen_func = None
-        self._saved_model = None
-        self.model = model_path
+        self.model = model
         self.dataloader = dataloader
         self.iterations = iterations
         self.op_types = op_types
         self.percentile = percentile
-        self.temp_path = temp_path
-        self.weight_name_mapping = weight_name_mapping
         self.print_node_list = []
         self._sq_input_node_names = []
         self._sq_target_node_names = {}
@@ -274,24 +266,32 @@ class SmoothQuantCalibrationLLM(SmoothQuantCalibration):
                     valid_data.append(i.strip())
 
         for activation in valid_data:
-            activation = activation.split(" ")
-            data = []
-            activation_name = ""
-            per_channel = []
-            for idx, s in enumerate(activation):
-                if idx == 0:
-                    per_channel.append(float(s.rsplit(":")[-1].strip("[")))
-                    activation_name = s.rsplit(":")[0][1:-9]
-                elif s.find("][") != -1:
-                    pairs = [float(i) for i in s.split("][")]
-                    per_channel.append(pairs[0])
-                    data.append(per_channel)
-                    per_channel = [pairs[1]]
-                elif s.find("]]") != -1:
-                    per_channel.append(float(s.strip("]")))
-                    data.append(per_channel)
-                else:
-                    per_channel.append(float(s))
+            [key, value] = activation.rsplit(":")
+            activation_name = key[1:-9]
+            import json
+            value = value.replace(' ', ',')
+            value = value.replace('][', '],[')
+            data = json.loads(value)
+
+        # for activation in valid_data:
+        #     activation = activation.split(" ")
+        #     data = []
+        #     activation_name = ""
+        #     per_channel = []
+        #     for idx, s in enumerate(activation):
+        #         if idx == 0:
+        #             per_channel.append(float(s.rsplit(":")[-1].strip("[")))
+        #             activation_name = s.rsplit(":")[0][1:-9]
+        #         elif s.find("][") != -1:
+        #             pairs = [float(i) for i in s.split("][")]
+        #             per_channel.append(pairs[0])
+        #             data.append(per_channel)
+        #             per_channel = [pairs[1]]
+        #         elif s.find("]]") != -1:
+        #             per_channel.append(float(s.strip("]")))
+        #             data.append(per_channel)
+        #         else:
+        #             per_channel.append(float(s))
 
             if activation_name not in self._sq_output_tensor_dict:
                 self._sq_output_tensor_dict[activation_name] = [np.array(data)]
@@ -400,15 +400,14 @@ class SmoothQuantCalibrationLLM(SmoothQuantCalibration):
         """Evaluate function that inference the model to apply calibration.
 
         Args:
-            model (tf.python.trackable.autotrackable): The model to be evaluated.
+            model (tf.python.training.tracking.tracking.AutoTrackable): The model to be evaluated.
             The object is usually gotten by using tf.saved_model.load(model_dir) API.
 
         Returns:
             accuracy (float): The accuracy result.
         """
-        input_tensor_names = model.input_tensor_names
-        auto_trackable = model.model
-        infer = auto_trackable.signatures["serving_default"]
+        input_tensor_names = self.model.input_tensor_names
+        infer = model.signatures["serving_default"]
         for idx, (inputs, _) in enumerate(self.dataloader):
             feed_dict = {}
             if len(input_tensor_names) == 1:
@@ -426,8 +425,8 @@ class SmoothQuantCalibrationLLM(SmoothQuantCalibration):
     def _inference(self, sampling_graph_def):
         logger.info("Start sampling on calibration dataset for Smooth Quantization.")
         # reconstruct graph_def that inserted print node to saved_model
-        reconstruct_saved_model(sampling_graph_def, self.func, self.frozen_func, self._saved_model, self.temp_path)
-        model = Model(self.temp_path, modelType="llm_saved_model")
+        reconstruct_saved_model(sampling_graph_def, self.model.func, self.model.frozen_func, self.model._saved_model, self.model.model_path)
+        model = tf.saved_model.load(self.model.model_path)
         self.evaluate(model)
 
     def _inference_for_calibration(self, model):
@@ -440,9 +439,9 @@ class SmoothQuantCalibrationLLM(SmoothQuantCalibration):
         del sampling_graph_def
 
     def _get_weight_tensors(self):
-        model = load.load(self.model, [tag_constants.SERVING])
-        for weight_tensor in model.variables:
-            parsed_name = self.weight_name_mapping(weight_tensor.name)
+        auto_trackable = self.model.model
+        for weight_tensor in auto_trackable.variables:
+            parsed_name = self.model.weight_name_mapping(weight_tensor.name)
             if parsed_name in self._sq_target_node_names:
                 self._sq_weight_tensor_dict[parsed_name] = weight_tensor.numpy()
 
@@ -450,12 +449,12 @@ class SmoothQuantCalibrationLLM(SmoothQuantCalibration):
             self._sq_target_node_names
         ), "Failed to get weights for some nodes, please check variables"
 
-    def _generate_calibration_data(self, input_node_names, output_node_names):
+    def _generate_calibration_data(self):
         """Generate the calibration data."""
         sorted_graph = QuantizeGraphHelper().get_sorted_graph(
-            self.graph_def,
-            input_node_names,
-            output_node_names,
+            self.model.graph_def,
+            self.model.input_node_names,
+            self.model.output_node_names,
         )
 
         for node in sorted_graph.node:
@@ -468,25 +467,20 @@ class SmoothQuantCalibrationLLM(SmoothQuantCalibration):
             self.print_node_list.append([node.name])
             self._sq_target_node_names[node.input[1]] = node.name
         self._get_weight_tensors()
-        sampling_graph_def = copy.deepcopy(self.graph_def)
+        sampling_graph_def = copy.deepcopy(self.model.graph_def)
         self._inference_for_calibration(sampling_graph_def)
 
-    def __call__(self, input_node_names, output_node_names):
+    def __call__(self):
         """Generates calibration data and calculate the maximum values per channel.
-
-        Args:
-            input_node_names: (list): A list of names for input nodes.
-            output_node_names: (list): A list of names for output nodes.
 
         Returns:
             max_vals_per_channel (dict): A dictionary containing the maximum values per channel.
             sq_target_node_names (dict): A dictionary mapping from weight names to target node names.
             sq_weight_tensor_dict (dict): A dictionary containing tensor of weights.
         """
-        self.graph_def, self._saved_model, self.func, self.frozen_func, _, _ = parse_saved_model(self.model)
-        self._generate_calibration_data(input_node_names, output_node_names)
+        self._generate_calibration_data()
         max_vals_per_channel = {}
         for activation_name, output_tensor in self._sq_output_tensor_dict.items():
             max_val_per_channel = self._get_maxval_per_channel(output_tensor, percentile=self.percentile)
             max_vals_per_channel[activation_name] = max_val_per_channel
-        return max_vals_per_channel, self._sq_target_node_names, self._sq_weight_tensor_dict, self.graph_def
+        return max_vals_per_channel, self._sq_target_node_names, self._sq_weight_tensor_dict
