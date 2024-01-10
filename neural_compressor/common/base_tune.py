@@ -157,3 +157,21 @@ class Tuner:
             q_model = self.fwk_wrapper.apply(quant_config=config)
             if self.get_best_model(q_model, self.get_tuning_objective_score(q_model)):
                 return q_model
+
+
+from enum import Enum
+
+
+class AutoTuneMode(Enum):
+    DEFAULT = 1
+    Aggressive = 2
+    Conservative = 3
+
+
+def get_default_quant_configs_list_from_config_registry(
+    config_registry: Dict[str, BaseConfig], mode=AutoTuneMode.DEFAULT
+):
+    quant_config_list = []
+    for config_name, config_cls in config_registry.items():
+        quant_config_list.append(config_cls.get_default_quant_configs(mode))
+    return quant_config_list

@@ -24,6 +24,7 @@ from typing import Callable, Dict, List, NamedTuple, Optional, Tuple, Union
 import torch
 
 from neural_compressor.common.base_config import BaseConfig, register_config, registered_configs
+from neural_compressor.common.base_tune import AutoTuneMode, get_default_quant_configs_list_from_config_registry
 from neural_compressor.common.utility import (
     DEFAULT_WHITE_LIST,
     FP8_QUANT,
@@ -170,6 +171,10 @@ class RTNWeightQuantConfig(BaseConfig):
         logger.debug(f"Get model info: {filter_result}")
         return filter_result
 
+    @classmethod
+    def get_default_quant_configs(cls, mode) -> RTNWeightQuantConfig:
+        return RTNWeightQuantConfig()
+
 
 # TODO(Yi) run `register_supported_configs` for all registered config.
 RTNWeightQuantConfig.register_supported_configs()
@@ -302,6 +307,10 @@ class GPTQConfig(BaseConfig):
         logger.debug(f"Get model info: {filter_result}")
         return filter_result
 
+    @classmethod
+    def get_default_quant_configs(cls, mode) -> GPTQConfig:
+        return GPTQConfig()
+
 
 # TODO(Yi) run `register_supported_configs` for all registered config.
 GPTQConfig.register_supported_configs()
@@ -389,6 +398,10 @@ if is_hpex_avaliable():
             logger.debug(f"Get model info: {filter_result}")
             return filter_result
 
+        @classmethod
+        def get_default_quant_configs(cls, mode) -> FP8QConfig:
+            return FP8QConfig()
+
     # TODO(Yi) run `register_supported_configs` for all registered config.
     FP8QConfig.register_supported_configs()
 
@@ -404,3 +417,7 @@ if is_hpex_avaliable():
 
     def get_all_registered_configs() -> Dict[str, BaseConfig]:
         return registered_configs.get(FRAMEWORK_NAME, {})
+
+
+def get_default_quant_configs_list(mode=AutoTuneMode.DEFAULT):
+    return get_default_quant_configs_list_from_config_registry(registered_configs[FRAMEWORK_NAME], mode)

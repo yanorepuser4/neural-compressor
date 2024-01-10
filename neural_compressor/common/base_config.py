@@ -71,6 +71,7 @@ class BaseConfig(ABC):
 
     name = BASE_CONFIG
     params_list = []
+    default_quant_configs = None
 
     def __init__(self, white_list: Optional[List[OP_NAME_OR_MODULE_TYPE]] = DEFAULT_WHITE_LIST) -> None:
         self._global_config: Optional[BaseConfig] = None
@@ -312,6 +313,11 @@ class BaseConfig(ABC):
         # TODO (Yi), ort and tf need override it
         return not isinstance(name, str)
 
+    @classmethod
+    @abstractmethod
+    def get_default_quant_configs(cls, mode) -> None:
+        raise NotImplementedError
+
 
 class ComposableConfig(BaseConfig):
     name = COMPOSABLE_CONFIG
@@ -358,3 +364,7 @@ class ComposableConfig(BaseConfig):
     def register_supported_configs(cls):
         """Add all supported configs."""
         raise NotImplementedError
+
+    @classmethod
+    def get_default_quant_configs(cls, mode):
+        return cls.default_quant_configs
