@@ -159,13 +159,13 @@ class Tuner:
                 return q_model
 
 
-from enum import Enum
+from enum import Enum, auto
 
 
 class AutoTuneMode(Enum):
-    DEFAULT = 1
-    Aggressive = 2
-    Conservative = 3
+    DEFAULT = auto()
+    AGGRESSIVE = auto()
+    CONSERVATIVE = auto()
 
 
 def get_default_quant_configs_list_from_config_registry(
@@ -175,3 +175,68 @@ def get_default_quant_configs_list_from_config_registry(
     for config_name, config_cls in config_registry.items():
         quant_config_list.append(config_cls.get_default_quant_configs(mode))
     return quant_config_list
+
+
+'''
+
+#############################
+##TODO Design note remove it before merge
+
+
+## Default tune config
+DEFAULT_ALGORITHMS_LIST = "default_algorithms_list"
+
+def get_default_quant_configs():
+
+def get_default_static_quant_configs():
+    #                space                        -> sampler(default) ->            sample
+    return StaticQuantConfig(per_tensor=[True, False]) # -> StaticQuantConfig(per_tensor=True), StaticQuantConfig(per_tensor=False)
+
+
+
+StaticQuantConfig() -> staticconfig1, staticconfig2
+
+FallBackConfig()
+
+def get_default_basic_quant_configs() ->
+
+quant_configs = [StaticQuantConfig(act_dtype=[], weight_dtype=[]), FallBackConfig()]
+
+
+def get_default_quant_configs(mode: AutoTuneMode = AutoTuneMode.DEFAULT, algorithms: List = DEFAULT_ALGORITHMS_LIST) -> List[BaseConfig]:
+    """
+    basic:
+        [
+            StaticQuantConfig(),
+
+        ]
+    [StaticQuantConfig(), GPTQConfig(weight_bits=[4, 6, 8]), RTNWeightQuantConfig(weight_bits=[4, 6, 8])]
+    GPTQ:
+        DEFAULT:
+                GPTQConfig(weight_bits=[4, 6, 8])
+        AGGRESSIVE
+                GPTQConfig(weight_bits=[2, 4, 6, 8])
+        CONSERVATIVE
+                GPTQConfig(weight_bits=[8, 6])
+
+    RTN:
+        DEFAULT:
+                RTNWeightQuantConfig(weight_bits=[4, 6, 8])
+        AGGRESSIVE
+                RTNWeightQuantConfig(weight_bits=[2, 4, 6, 8])
+        CONSERVATIVE
+                RTNWeightQuantConfig(weight_bits=[8, 6])
+    ...
+    """
+
+    pass
+
+=====================================
+-> config1, config2
+
+tuning_config = BaseTuningConfig(quant_configs=get_default_quant_configs(), max_trials=10)
+-
+- #trials
+
+"""
+'''
