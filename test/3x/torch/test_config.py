@@ -95,7 +95,7 @@ class TestQuantizationConfig(unittest.TestCase):
         # llama.cpp GGML_TYPE_Q4_K setting
         from neural_compressor.torch.utils.utility import get_double_quant_config
 
-        double_quant_config_dict = get_double_quant_config("GGML_TYPE_Q4_K", weight_sym=False)
+        double_quant_config_dict = get_double_quant_config("GGML_TYPE_Q4_K")
         quant_config = RTNWeightQuantConfig.from_dict(double_quant_config_dict)
         quant_config.set_local("lm_head", fp32_config)
         qmodel = quantize(fp32_model, quant_config)
