@@ -59,10 +59,26 @@ def autotune(
     run_fn=None,
     run_args=None,
 ):
+    #####  Option 1.  Original Impl
     tuning_objectives.set_eval_fn_registry(eval_fns)
     torch_wrapper = TorchWrapper(model, run_fn, run_args)
     tuner = Tuner(tune_config=tune_config, tuning_objectives=tuning_objectives, fwk_wrapper=torch_wrapper)
     best_qmodel = tuner.search()
+    return best_qmodel
+
+    #####  Option 2. New impl
+    from nueral_compressor.common import init_tuning
+
+    from neural_compressor.torch import quantize
+
+    sampler, evaluator, recorder = init_tuning(tune_config)
+    for quant_config in sampler.next_config():
+        q_model = quantize(model=model, quant_config=quant_config, run_fn=run_fn, run_args=run_args)
+        eval_result = evaluator.eval(q_model)
+        recorder.add_new_trial(quant_config, eval_result)
+        if recorder.needs_stop():
+            best_qmodel = recorder.get_best_qmodel()
+            return best_qmodel
     return best_qmodel
 
 
