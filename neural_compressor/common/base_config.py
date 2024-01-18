@@ -21,7 +21,6 @@ import json
 import re
 from abc import ABC, abstractmethod
 from collections import OrderedDict
-from copy import deepcopy
 from itertools import product
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
@@ -35,6 +34,9 @@ from neural_compressor.common.utility import (
     LOCAL,
     OP_NAME_OR_MODULE_TYPE,
 )
+
+__all__ = ["config_registry", "register_config", "BaseConfig", "ComposableConfig"]
+
 
 logger = Logger().get_logger()
 
@@ -268,6 +270,11 @@ class BaseConfig(ABC):
         raise NotImplementedError
 
     @classmethod
+    @abstractmethod
+    def get_default_quant_configs(cls) -> Optional(Union["BaseConfig", List["BaseConfig"]]):
+        raise NotImplementedError
+
+    @classmethod
     def validate(self, user_config: BaseConfig):
         # TODO(Yi) validate the user config
         pass
@@ -411,3 +418,7 @@ class ComposableConfig(BaseConfig):
     def register_supported_configs(cls):
         """Add all supported configs."""
         raise NotImplementedError
+
+    @classmethod
+    def get_default_quant_configs(cls) -> Optional(Union["BaseConfig", List["BaseConfig"]]):
+        return None

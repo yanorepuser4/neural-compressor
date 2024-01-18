@@ -24,6 +24,7 @@ from typing import Callable, Dict, List, NamedTuple, Optional, Tuple, Union
 import torch
 
 from neural_compressor.common.base_config import BaseConfig, config_registry, register_config
+from neural_compressor.common.base_tuning import get_default_quant_configs_list_from_config_registry
 from neural_compressor.common.utility import (
     DEFAULT_WHITE_LIST,
     FP8_QUANT,
@@ -171,6 +172,10 @@ class RTNWeightQuantConfig(BaseConfig):
         logger.debug(f"Get model info: {filter_result}")
         return filter_result
 
+    @classmethod
+    def get_default_quant_configs(cls) -> Optional(Union["RTNWeightQuantConfig", List["RTNWeightQuantConfig"]]):
+        return RTNWeightQuantConfig(weight_bits=[4, 6])
+
 
 # TODO(Yi) run `register_supported_configs` for all registered config.
 RTNWeightQuantConfig.register_supported_configs()
@@ -303,6 +308,10 @@ class GPTQConfig(BaseConfig):
         logger.debug(f"Get model info: {filter_result}")
         return filter_result
 
+    @classmethod
+    def get_default_quant_configs(cls) -> Optional(Union["GPTQConfig", List["GPTQConfig"]]):
+        return GPTQConfig(weight_bits=[4, 6])
+
 
 # TODO(Yi) run `register_supported_configs` for all registered config.
 GPTQConfig.register_supported_configs()
@@ -390,6 +399,10 @@ if is_hpex_avaliable():
             logger.debug(f"Get model info: {filter_result}")
             return filter_result
 
+        @classmethod
+        def get_default_quant_configs(cls) -> Optional(Union["FP8QConfig", List["FP8QConfig"]]):
+            return FP8QConfig(weight_dtype=[torch.float8_e4m3fn])
+
     # TODO(Yi) run `register_supported_configs` for all registered config.
     FP8QConfig.register_supported_configs()
 
@@ -406,3 +419,7 @@ if is_hpex_avaliable():
     def get_all_registered_configs() -> Dict[str, BaseConfig]:
         registered_configs = config_registry.get_all_configs()
         return registered_configs.get(FRAMEWORK_NAME, {})
+
+
+def get_default_quant_configs_list() -> List[BaseConfig]:
+    return get_default_quant_configs_list_from_config_registry(FRAMEWORK_NAME, config_registry)

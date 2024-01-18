@@ -21,8 +21,6 @@ from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Union
 from neural_compressor.common.base_config import BaseConfig, ComposableConfig
 from neural_compressor.common.logger import Logger
 
-logger = Logger().get_logger()
-
 __all__ = [
     "Evaluator",
     "TuningConfig",
@@ -32,6 +30,9 @@ __all__ = [
     "TuningLogger",
     "init_tuning",
 ]
+
+
+logger = Logger().get_logger()
 
 
 class Evaluator:
@@ -269,3 +270,13 @@ def init_tuning(tuning_config: TuningConfig) -> Tuple[ConfigLoader, TuningLogger
     tuning_logger = TuningLogger()
     tuning_monitor = TuningMonitor(tuning_config)
     return config_loader, tuning_logger, tuning_monitor
+
+
+from neural_compressor.common.base_config import ConfigRegistry
+
+
+def get_default_quant_configs_list_from_config_registry(framework_name: str, config_registry: ConfigRegistry):
+    quant_config_list = []
+    for config_name, config_cls in config_registry.get_sorted_configs():
+        quant_config_list.append(config_cls.get_default_quant_configs())
+    return quant_config_list

@@ -19,6 +19,18 @@
 import logging
 import os
 
+__all__ = [
+    "Logger",
+    "level",
+    "log",
+    "info",
+    "debug",
+    "warn",
+    "warning",
+    "error",
+    "fatal",
+]
+
 
 class Logger(object):
     """Logger class."""
