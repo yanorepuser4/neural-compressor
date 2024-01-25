@@ -335,6 +335,27 @@ class ConvertSavedModel():
                                           self.sq_weight_tensor_dict, self.sq_weight_node_names)
         return sq_graph_def_dict
 
+    def remove_quantizev2_for_readvriableop(self, graph_def):
+        from neural_compressor import Model
+        from tensorflow.python.framework import dtypes, tensor_util
+        from tensorflow.core.framework import node_def_pb2, attr_value_pb2
+        from neural_compressor.adaptor.tf_utils.graph_util import GraphAnalyzer
+        from neural_compressor.adaptor.tf_utils.graph_util import GraphRewriterHelper as Helper
+
+        g_analyzer = GraphAnalyzer()
+        g_analyzer.graph = graph_def
+        graph_info = g_analyzer.parse_graph()
+        pattern = [["_QuantizedMatMul"]]
+        target_nodes = g_analyzer.query_fusion_pattern_nodes(pattern)
+        for i in target_nodes:
+            quantized_node_name = i[0]
+            quantized_node = graph_info[quantized_node_name].node
+            quantizev2_node_name = quantized_node.input[1]
+            g_analyzer.remove_node(quantizev2_node_name)
+            quantized_node.input[1] = quantizev2_node_name.replace("_qint8_const_quant", "")
+        new_graph_def = g_analyzer.dump_graph()
+        return new_graph_def
+
     def __call__(self):
         res_graph_def_dict = {}
         for target_signature_name in self.signature_names:
@@ -363,6 +384,10 @@ class ConvertSavedModel():
 
         for target_signature_name in self.signature_names:
             quantized_graph_def_dict[target_signature_name][0] = res_graph_def_dict[target_signature_name]
+
+        for target_signature_name in self.signature_names:
+            graph_def = quantized_graph_def_dict[target_signature_name][0]
+            quantized_graph_def_dict[target_signature_name][0] = self.remove_quantizev2_for_readvriableop(graph_def)
 
         print('Save Quantized model to ', self.dst)
 
