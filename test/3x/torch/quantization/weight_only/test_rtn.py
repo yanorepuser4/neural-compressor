@@ -11,6 +11,7 @@ from neural_compressor.torch.quantization import (
     get_default_rtn_config,
     quantize,
 )
+from neural_compressor.torch.utils import is_cuda_available
 
 
 class TestRTNQuant:
@@ -221,3 +222,16 @@ class TestRTNQuant:
         out1 = model(self.example_inputs)[0]
         atol_GGML = (out1 - self.label).amax()
         assert atol_BNB < atol_GGML, "atol_BNB should be smaller than atol_GGML due to its asym double_quant."
+
+    # TODO: (Suyue) How to test on different device?
+    # @pytest.mark.skipif(not is_cuda_available())
+    # @pytest.mark.gpu # pytest -k gpu test_xxx.py
+    def test_fp16_param(self):
+        # test_default_rtn_config
+        model = copy.deepcopy(self.tiny_gptj)
+        model.half()
+        org_dtype = model.lm_head.weight.dtype
+        quant_config = get_default_rtn_config()
+        model = quantize(model, quant_config)
+        new_dtype = model.lm_head.weight.dtype
+        assert new_dtype == org_dtype, "dtype should not be changed after quantization"

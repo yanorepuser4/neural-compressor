@@ -19,7 +19,7 @@ import torch
 from neural_compressor.common.utils import FP8_QUANT, GPTQ, RTN  # unified namespace
 from neural_compressor.torch.algorithms.weight_only import gptq_quantize, rtn_quantize
 from neural_compressor.torch.quantization import GPTQConfig, RTNConfig
-from neural_compressor.torch.utils import logger, register_algo
+from neural_compressor.torch.utils import is_cuda_available, logger, register_algo
 
 
 ###################### RTN Algo Entry ##################################
@@ -87,6 +87,8 @@ def gptq_entry(
         }
     )
 
+    if is_cuda_available():
+        device = "cuda"
     logger.warning("lm_head in transformer model is skipped by GPTQ")
     model, quantization_perm = gptq_quantize(model=model, weight_config=weight_config, *args, **kwargs)
     # Assign the gptq config as an attribute of model

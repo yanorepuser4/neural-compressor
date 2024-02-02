@@ -38,3 +38,12 @@ except:
 
 def is_ipex_available():
     return _ipex_available
+
+
+import torch
+
+_cuda_available = torch.cuda.is_available()
+
+
+def is_cuda_available():
+    return _cuda_available
