@@ -62,21 +62,21 @@ class RTNConfig(BaseConfig):
     """Config class for round-to-nearest weight-only quantization."""
 
     name = RTN
-    params_list = [
-        "dtype",
-        "bits",
-        "group_size",
-        "use_sym",
-        "use_full_range",
-        "use_mse_search",
-        "use_layer_wise",
-        "export_compressed_model",
-        "use_double_quant",
-        "double_quant_dtype",
-        "double_quant_bits",
-        "double_quant_use_sym",
-        "double_quant_group_size",
-    ]
+    # params_list = [
+    #     "dtype",
+    #     "bits",
+    #     "group_size",
+    #     "use_sym",
+    #     "use_full_range",
+    #     "use_mse_search",
+    #     "use_layer_wise",
+    #     "export_compressed_model",
+    #     "use_double_quant",
+    #     "double_quant_dtype",
+    #     "double_quant_bits",
+    #     "double_quant_use_sym",
+    #     "double_quant_group_size",
+    # ]
     supported_configs: List[OperatorConfig] = []
 
     def __init__(
@@ -203,29 +203,29 @@ class GPTQConfig(BaseConfig):
 
     name = GPTQ
     supported_configs: List[OperatorConfig] = []
-    params_list = [
-        "weight_dtype",
-        "weight_bits",
-        "weight_group_size",
-        "weight_sym",
-        "block_size",
-        "act_dtype",
-        "group_dim",
-        "nsamples",
-        "dataloader_len",
-        "percdamp",
-        "act_order",
-        "use_max_length",
-        "pad_max_length",
-        "enable_mse_search",
-        "device",
-        "layer_wise",
-        "return_int",
-        "double_quant_dtype",
-        "double_quant_bits",
-        "double_quant_sym",
-        "double_quant_group_size",
-    ]
+    # params_list = [
+    #     "weight_dtype",
+    #     "weight_bits",
+    #     "weight_group_size",
+    #     "weight_sym",
+    #     "block_size",
+    #     "act_dtype",
+    #     "group_dim",
+    #     "nsamples",
+    #     "dataloader_len",
+    #     "percdamp",
+    #     "act_order",
+    #     "use_max_length",
+    #     "pad_max_length",
+    #     "enable_mse_search",
+    #     "device",
+    #     "layer_wise",
+    #     "return_int",
+    #     "double_quant_dtype",
+    #     "double_quant_bits",
+    #     "double_quant_sym",
+    #     "double_quant_group_size",
+    # ]
 
     def __init__(
         self,
@@ -322,16 +322,16 @@ class StaticQuantConfig(BaseConfig):
     """Config class for static quantization."""
 
     name = STATIC_QUANT
-    params_list = [
-        "w_dtype",
-        "w_sym",
-        "w_granularity",
-        "w_algo",
-        "act_dtype",
-        "act_sym",
-        "act_granularity",
-        "act_algo",
-    ]
+    # params_list = [
+    #     "w_dtype",
+    #     "w_sym",
+    #     "w_granularity",
+    #     "w_algo",
+    #     "act_dtype",
+    #     "act_sym",
+    #     "act_granularity",
+    #     "act_algo",
+    # ]
     supported_configs: List[OperatorConfig] = []
 
     def __init__(
@@ -399,20 +399,20 @@ class SmoothQuantConfig(BaseConfig):
     """Config class for smooth quantization."""
 
     name = SMOOTH_QUANT
-    params_list = [
-        "w_dtype",
-        "w_sym",
-        "w_granularity",
-        "w_algo",
-        "act_dtype",
-        "act_sym",
-        "act_granularity",
-        "act_algo",
-        "alpha",
-        "folding",
-        "scale_sharing",
-        "auto_alpha_args",
-    ]
+    # params_list = [
+    #     "w_dtype",
+    #     "w_sym",
+    #     "w_granularity",
+    #     "w_algo",
+    #     "act_dtype",
+    #     "act_sym",
+    #     "act_granularity",
+    #     "act_algo",
+    #     "alpha",
+    #     "folding",
+    #     "scale_sharing",
+    #     "auto_alpha_args",
+    # ]
     supported_configs: List[OperatorConfig] = []
 
     def __init__(
