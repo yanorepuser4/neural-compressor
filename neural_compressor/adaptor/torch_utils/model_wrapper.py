@@ -548,12 +548,31 @@ class TEQLinearFakeQuant(torch.nn.Module):
         self.scheme = scheme
 
     def forward(self, x):
-        alpha = torch.clip(self.alpha, 1e-5)
+        # x: [*, in_features]
+        # weight: [out_features, in_features]
+        # weight.T: [in_features, out_features]
+
+        # alpha: [in_features]
+
+        # X = X * scale^-1
+        alpha = self.alpha(x)
+        alpha = torch.clip(alpha, min=1e-5)
         shape_len = len(x.shape) - 1
-        shape = (1,) * shape_len + (-1,)
-        x = x / alpha.view(shape)
+        # shape = (1,) * shape_len + (-1,)
+        # reshape scale to match the shape of x
+        inverse_scale_for_x = 1 / alpha
+        inverse_scale_new_shape = (1,) * shape_len + (-1,)
+        inverse_scale_for_x = inverse_scale_for_x.view(inverse_scale_new_shape)
+        # x = x / alpha.view(shape)
+        # logger.info(f"for x, the inverse scale is : {inverse_scale_for_x}")
+        # logger.info(f"The range of x is : {x.min()} - {x.max()}; the range of inverse scale is : {inverse_scale_for_x.min()} - {inverse_scale_for_x.max()}")
+        x = x * inverse_scale_for_x
+
+        # W = W * scale
+        scale_for_weight = alpha.unsqueeze(dim=0)
         weight = self.orig_layer.weight
-        weight = weight * alpha.unsqueeze(dim=0)
+        # weight = weight * alpha.unsqueeze(dim=0)
+        weight = weight * scale_for_weight
         weight_q = FakeAffineTensorQuantFunction().apply(weight, self.num_bits, self.group_size, self.scheme)
         return F.linear(x, weight_q, self.orig_layer.bias)
 

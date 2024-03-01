@@ -33,6 +33,7 @@ import transformers
 from neural_compressor.adaptor.torch_utils.waq import get_module, set_module
 
 from .model_wrapper import MulLinear, TEQLinearFakeQuant
+from .teq_utils import ScaleCalculator
 from .weight_only import quant_weight
 
 
@@ -88,8 +89,9 @@ class TEQuantizer:
                 alpha = torch.nn.Parameter(max_value)
                 alpha = alpha.to(self.device)
             else:
-                alpha = torch.nn.Parameter(torch.ones(module.weight.shape[1], device=self.device))
-
+                # TODO: @yi refine it later
+                # alpha = torch.nn.Parameter(torch.ones(module.weight.shape[1], device=self.device))
+                alpha = ScaleCalculator(shape=module.weight.shape[1], device=self.device)
             self.trained_alphas[layer_norm] = alpha
             for layer_name in self.absorb_to_layer[layer_norm]:
                 if self.weight_config.get(layer_name) is None:  # pragma: no cover
@@ -114,7 +116,8 @@ class TEQuantizer:
                 group_size = self.weight_config[layer_name]["group_size"]
                 scheme = self.weight_config[layer_name]["scheme"]
 
-                alpha = torch.nn.Parameter(torch.ones(m.weight.shape[1], device=self.device))
+                # alpha = torch.nn.Parameter(torch.ones(m.weight.shape[1], device=self.device))
+                alpha = ScaleCalculator(shape=m.weight.shape[1], device=self.device)
                 alpha.requires_grad_(False)
                 wrapper_module = TEQLinearFakeQuant(
                     orig_layer=m, alpha=alpha, num_bits=num_bits, group_size=group_size, scheme=scheme
@@ -210,6 +213,9 @@ class TEQuantizer:
         for ln_name, layer_names in self.absorb_to_layer.items():
             module = get_module(self.model, ln_name)
             scale = self.trained_alphas[ln_name]
+            # TODO: @yi refine it later
+            if isinstance(scale, ScaleCalculator):
+                scale = scale.get_final_scale().detach()
             scale = torch.clip(scale, 1e-5)
             input_scale = 1.0 / scale
             if hasattr(module, "orig_layer"):
@@ -241,7 +247,14 @@ class TEQuantizer:
         """Train function."""
         trained_alphas_list = []
         for item in self.trained_alphas.items():
-            trained_alphas_list.append(item[1])
+            alpha = item[1]
+            if isinstance(alpha, torch.nn.Parameter):
+                trained_alphas_list.append(item[1])
+            elif isinstance(alpha, ScaleCalculator):
+                logger.info(f"alpha {item[0]} is ScaleCalculator!!!")
+                trained_alphas_list.extend(alpha.parameters())
+            else:
+                raise ValueError(f"unsupported alpha type {type(alpha)}")
         optimizer = torch.optim.Adam(trained_alphas_list, lr=lr, weight_decay=weight_decay, betas=betas)
 
         lr_scheduler = transformers.get_scheduler(  # pylint: disable=E1111
