@@ -132,6 +132,9 @@ class Auto_Accelerator(ABC):
     def synchronize(self):
         pass
 
+    def mark_step(self):
+        pass
+
 
 @register_accelerator(name="cpu", priority=PRIORITY_CPU)
 class CPU_Accelerator(Auto_Accelerator):
@@ -240,6 +243,10 @@ class HPU_Accelerator(Auto_Accelerator):
         # https://docs.habana.ai/en/latest/PyTorch/PyTorch_Model_Porting/GPU_Migration_Toolkit/Intel_Gaudi_GPU_Migration_APIs.html?highlight=empty_cache#hpu-mismatch
         # return torch.hpu.empty_cache()
         return None
+
+    def mark_step(self):
+        # Usage: https://docs.habana.ai/en/latest/PyTorch/Model_Optimization_PyTorch/Optimization_in_PyTorch_Models.html?highlight=mark_step#usage-of-mark-step
+        return torch.hpu.mark_step()
 
 
 def auto_detect_accelerator(device_name="auto") -> Auto_Accelerator:

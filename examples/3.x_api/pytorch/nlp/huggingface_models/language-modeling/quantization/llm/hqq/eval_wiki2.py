@@ -55,6 +55,7 @@ def eval_wikitext2(model, tokenizer, max_length=1024, stride=512, verbose=True):
         t1 = time.time()
         with torch.no_grad():
             log_likelihood = model(input_ids, labels=target_ids).loss * trg_len
+            auto_detect_accelerator().mark_step()
         # torch.cuda.synchronize()
         auto_detect_accelerator().synchronize()
         t2 = time.time()
