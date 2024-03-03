@@ -44,7 +44,7 @@ def optimize_weights_proximal_legacy(
     device = auto_detect_accelerator().current_device()
 
     # TODO: refine it for cpu device
-    if auto_detect_accelerator().name() == "cuda":
+    if auto_detect_accelerator().name() != "cpu":
         dtype = torch.float16
     else:
         dtype = torch.float32
