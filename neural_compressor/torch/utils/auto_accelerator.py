@@ -246,7 +246,9 @@ class HPU_Accelerator(Auto_Accelerator):
 
     def mark_step(self):
         # Usage: https://docs.habana.ai/en/latest/PyTorch/Model_Optimization_PyTorch/Optimization_in_PyTorch_Models.html?highlight=mark_step#usage-of-mark-step
-        return torch.hpu.mark_step()
+        import habana_frameworks.torch.core as htcore
+
+        return htcore.mark_step()
 
 
 def auto_detect_accelerator(device_name="auto") -> Auto_Accelerator:
