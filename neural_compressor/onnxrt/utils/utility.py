@@ -17,11 +17,33 @@ from typing import Callable, Dict, List, Tuple, Union
 
 import numpy as np
 import onnx
+import onnxruntime.tools.symbolic_shape_infer as symbolic_shape_infer
 from packaging.version import Version
 
 from neural_compressor.common import Logger
 
 logger = Logger().get_logger()
+
+__all__ = [
+    "ONNXRT116_VERSION",
+    "ONNXRT1161_VERSION",
+    "algos_mapping",
+    "WHITE_MODULE_LIST",
+    "MAXIMUM_PROTOBUF",
+    "PRIORITY_RTN",
+    "PRIORITY_GPTQ",
+    "PRIORITY_AWQ",
+    "PRIORITY_SMOOTH_QUANT",
+    "dtype_mapping",
+    "find_by_name",
+    "simple_progress_bar",
+    "register_algo",
+    "get_model_info",
+    "is_B_transposed",
+    "get_qrange_for_qType",
+    "quantize_data",
+    "check_model_with_infer_shapes",
+]
 
 ONNXRT116_VERSION = Version("1.16.0")
 ONNXRT1161_VERSION = Version("1.16.1")
@@ -34,6 +56,9 @@ WHITE_MODULE_LIST = ["MatMul", "Conv"]
 
 MAXIMUM_PROTOBUF = 2147483648
 
+PRIORITY_RTN = 60
+PRIORITY_GPTQ = 70
+PRIORITY_AWQ = 50
 PRIORITY_SMOOTH_QUANT = 80
 
 dtype_mapping = {
@@ -146,7 +171,7 @@ def get_qrange_for_qType(qType, reduce_range=False):
         raise ValueError("unsupported quantization data type")
 
 
-def quantize_data_with_scale_zero(data, qType, scheme, scale, zero_point):
+def _quantize_data_with_scale_zero(data, qType, scheme, scale, zero_point):
     """Quantize data with scale and zero point.
 
     To pack weights, we compute a linear transformation
@@ -172,7 +197,7 @@ def quantize_data_with_scale_zero(data, qType, scheme, scale, zero_point):
     return quantized_data
 
 
-def calculate_scale_zp(rmin, rmax, quantize_range, qType, scheme):
+def _calculate_scale_zp(rmin, rmax, quantize_range, qType, scheme):
     """Calculate scale and zero point."""
     if isinstance(rmax, np.ndarray):
         if scheme == "sym":
@@ -245,6 +270,19 @@ def quantize_data(data, quantize_range, qType, scheme):
     rmin = min(min(data), 0)
     rmax = max(max(data), 0)
 
-    scale, zero_point = calculate_scale_zp(rmin, rmax, quantize_range, qType, scheme)
-    quantized_data = quantize_data_with_scale_zero(data, qType, scheme, scale, zero_point)
+    scale, zero_point = _calculate_scale_zp(rmin, rmax, quantize_range, qType, scheme)
+    quantized_data = _quantize_data_with_scale_zero(data, qType, scheme, scale, zero_point)
     return rmin, rmax, zero_point, scale, quantized_data
+
+
+def check_model_with_infer_shapes(model):
+    """Check if the model has been shape inferred."""
+    from neural_compressor.onnxrt.utils.onnx_model import ONNXModel
+
+    if isinstance(model, (Path, str)):
+        model = onnx.load(model, load_external_data=False)
+    elif isinstance(model, ONNXModel):
+        model = model.model
+    if len(model.graph.value_info) > 0:
+        return True
+    return False

@@ -1,4 +1,4 @@
-# Copyright (c) 2023 Intel Corporation
+# Copyright (c) 2024 Intel Corporation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,9 +17,7 @@ from typing import Tuple
 import torch
 from torch.ao.quantization.observer import *
 
-# without scale factor 0.9, the output will be abnormal.
-E4M3_AMAX = torch.tensor(240 * 0.9, dtype=torch.float).to("hpu")
-E5M2_AMAX = torch.tensor(57344 * 0.9, dtype=torch.float).to("hpu")
+from .modules import E4M3_AMAX, E5M2_AMAX
 
 
 class FP8HistogramObserver(HistogramObserver):

@@ -13,4 +13,11 @@
 # limitations under the License.
 
 from neural_compressor.tensorflow.quantization.quantize import quantize_model
-from neural_compressor.tensorflow.quantization.config import StaticQuantConfig, get_default_static_quant_config
+from neural_compressor.tensorflow.quantization.autotune import autotune, get_all_config_set
+from neural_compressor.tensorflow.quantization.algorithm_entry import static_quant_entry, smooth_quant_entry
+from neural_compressor.tensorflow.quantization.config import (
+    StaticQuantConfig,
+    SmoothQuantConfig,
+    get_default_sq_config,
+    get_default_static_quant_config,
+)

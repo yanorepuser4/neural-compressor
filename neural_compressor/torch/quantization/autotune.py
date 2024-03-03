@@ -1,4 +1,4 @@
-# Copyright (c) 2023 Intel Corporation
+# Copyright (c) 2024 Intel Corporation
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,6 +19,7 @@ import torch
 
 from neural_compressor.common.base_config import BaseConfig, get_all_config_set_from_config_registry
 from neural_compressor.common.base_tuning import TuningConfig, evaluator, init_tuning
+from neural_compressor.common.utils import dump_elapsed_time
 from neural_compressor.torch.quantization import quantize
 from neural_compressor.torch.quantization.config import FRAMEWORK_NAME, RTNConfig
 from neural_compressor.torch.utils import constants, logger
@@ -41,6 +42,7 @@ def get_all_config_set() -> Union[BaseConfig, List[BaseConfig]]:
     return get_all_config_set_from_config_registry(fwk_name=FRAMEWORK_NAME)
 
 
+@dump_elapsed_time("Pass auto-tune")
 def autotune(
     model: torch.nn.Module,
     tune_config: TuningConfig,
@@ -70,10 +72,13 @@ def autotune(
         tuning_logger.trial_end(trial_index)
         if tuning_monitor.need_stop():
             logger.info("Stopped tuning.")
+            del q_model  # maybe gc.collect() is needed for memory release
             best_quant_config: BaseConfig = tuning_monitor.get_best_quant_config()
             # !!! Make sure to use deepcopy only when inplace is set to `True`.
-            quantize(deepcopy(model), quant_config=best_quant_config, run_fn=run_fn, run_args=run_args, inplace=True)
-            best_quant_model = model  # quantize model inplace
+            q_model = quantize(
+                deepcopy(model), quant_config=best_quant_config, run_fn=run_fn, run_args=run_args, inplace=True
+            )
+            best_quant_model = q_model  # quantize model inplace
             break
     tuning_logger.tuning_end()
     return best_quant_model

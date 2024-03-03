@@ -821,7 +821,7 @@ def get_mse_order_per_fp32(adaptor, model, example_inp, tune_cfg):
             if adaptor.version.release >= Version("1.13.0").release:  # pragma: no cover
                 tmp_model = prepare_fx(tmp_model, fx_op_cfgs, example_inp)
             else:
-                tmp_model = prepare_fx(
+                tmp_model = prepare_fx(  # pylint: disable=E1120
                     tmp_model,
                     fx_op_cfgs,
                 )
@@ -877,7 +877,7 @@ def get_mse_order_per_fp32(adaptor, model, example_inp, tune_cfg):
             if adaptor.version.release >= Version("1.13.0").release:  # pragma: no cover
                 tmp_model = prepare_fx(tmp_model, fx_op_cfgs, example_inp)
             else:
-                tmp_model = prepare_fx(
+                tmp_model = prepare_fx(  # pylint: disable=E1120
                     tmp_model,
                     fx_op_cfgs,
                 )
@@ -958,7 +958,7 @@ def get_mse_order_per_int8(adaptor, fp32_model, example_input, tune_cfg):
                 if adaptor.version.release >= Version("1.13.0").release:  # pragma: no cover
                     tmp_model = prepare_fx(tmp_model, fx_op_cfgs, example_inp)
                 else:
-                    tmp_model = prepare_fx(
+                    tmp_model = prepare_fx(  # pylint: disable=E1120
                         tmp_model,
                         fx_op_cfgs,
                     )
@@ -1187,7 +1187,7 @@ def get_module_input_output(
     if calib_func:
         calib_func(model)
     else:
-        from .smooth_quant import model_forward
+        from neural_compressor.adaptor.torch_utils.waq import model_forward
 
         model_forward(model, dataloader, iters, device=next(model.parameters()).device)
     for h in hook_list:
@@ -1209,7 +1209,7 @@ def get_absorb_layers(model, example_inputs, supported_layers=["Linear"], foldin
         no_absorb_layers: list of no_absorb_layers
     """
     # get modules that can be absorbed.
-    from .smooth_quant import GraphTrace
+    from neural_compressor.adaptor.torch_utils.waq import GraphTrace
 
     tg = GraphTrace()
     absorb_to_layer, no_absorb_layers = tg.get_absorb_to_layer(model, example_inputs, supported_layers)
@@ -1264,7 +1264,7 @@ def calibration(model, dataloader=None, n_samples=128, calib_func=None):
     else:
         import math
 
-        from .smooth_quant import model_forward
+        from neural_compressor.adaptor.torch_utils.waq import model_forward
 
         batch_size = dataloader.batch_size
         iters = int(math.ceil(n_samples / batch_size))

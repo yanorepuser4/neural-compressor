@@ -13,10 +13,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import torch
+from packaging.version import Version
 
 # pylint:disable=import-error
 try:
-    import deepspeed
     import habana_frameworks.torch.hpex
 
     _hpex_available = True
@@ -38,3 +39,32 @@ except:
 
 def is_ipex_available():
     return _ipex_available
+
+
+def get_ipex_version():
+    if _ipex_available:
+        try:
+            ipex_version = ipex.__version__.split("+")[0]
+        except ValueError as e:  # pragma: no cover
+            assert False, "Got an unknown version of intel_extension_for_pytorch: {}".format(e)
+        version = Version(ipex_version)
+        return version
+    else:
+        return None
+
+
+def get_torch_version():
+    try:
+        torch_version = torch.__version__.split("+")[0]
+    except ValueError as e:  # pragma: no cover
+        assert False, "Got an unknown version of torch: {}".format(e)
+    version = Version(torch_version)
+    return version
+
+
+def get_device(device_name="auto"):
+    from neural_compressor.torch.utils.auto_accelerator import auto_detect_accelerator
+
+    runtime_accelerator = auto_detect_accelerator(device_name)
+    device = runtime_accelerator.name()
+    return device

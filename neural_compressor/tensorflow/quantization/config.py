@@ -18,19 +18,30 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Callable, Dict, List, NamedTuple, Optional, Union
+from typing import Callable, Dict, List, NamedTuple, Optional, Tuple, Union
 
 import tensorflow as tf
 
+from neural_compressor.common import logger
 from neural_compressor.common.base_config import (
+    DEFAULT_WHITE_LIST,
+    OP_NAME_OR_MODULE_TYPE,
     BaseConfig,
     config_registry,
     register_config,
     register_supported_configs_for_fwk,
 )
-from neural_compressor.common.utils import DEFAULT_WHITE_LIST, OP_NAME_OR_MODULE_TYPE, STATIC_QUANT
+from neural_compressor.common.utils import SMOOTH_QUANT, STATIC_QUANT
+from neural_compressor.tensorflow.utils import DEFAULT_SQ_ALPHA_ARGS
 
-FRAMEWORK_NAME = "keras"
+FRAMEWORK_NAME = "tensorflow"
+
+__all__ = [
+    "StaticQuantConfig",
+    "get_default_static_quant_config",
+    "SmoothQuantConfig",
+    "get_default_sq_config",
+]
 
 
 class OperatorConfig(NamedTuple):
@@ -41,16 +52,18 @@ class OperatorConfig(NamedTuple):
 
 @register_config(framework_name=FRAMEWORK_NAME, algo_name=STATIC_QUANT)
 class StaticQuantConfig(BaseConfig):
-    """Config class for keras static quantization."""
+    """Config class for tf static quantization."""
 
     supported_configs: List[OperatorConfig] = []
     params_list = [
         "weight_dtype",
         "weight_sym",
         "weight_granularity",
+        "weight_algorithm",
         "act_dtype",
         "act_sym",
         "act_granularity",
+        "act_algorithm",
     ]
 
     name = STATIC_QUANT
@@ -60,9 +73,11 @@ class StaticQuantConfig(BaseConfig):
         weight_dtype: str = "int8",
         weight_sym: bool = True,
         weight_granularity: str = "per_tensor",
+        weight_algorithm: str = "minmax",
         act_dtype: str = "int8",
         act_sym: bool = True,
         act_granularity: str = "per_tensor",
+        act_algorithm: str = "minmax",
         white_list: Optional[List[OP_NAME_OR_MODULE_TYPE]] = DEFAULT_WHITE_LIST,
     ):
         """Init static quantization config.
@@ -71,17 +86,21 @@ class StaticQuantConfig(BaseConfig):
             weight_dtype (str): Data type for weights, default is "int".
             weight_sym (bool): Indicates whether weights are symmetric, default is True.
             weight_granularity (str): Calculate tensor-wise scales or channel-wise scales for weights.
+            weight_algorithm (str): Choose quantization algorithms for weights.
             act_dtype (str): Data type for activations, default is "int8".
             act_sym (bool): Indicates whether activations are symmetric, default is True.
             act_granularity (str): Calculate tensor-wise scales or channel-wise scales for activations.
+            act_algorithm (str): Choose quantization algorithms for activations.
         """
         super().__init__(white_list=white_list)
         self.weight_dtype = weight_dtype
         self.weight_sym = weight_sym
         self.weight_granularity = weight_granularity
+        self.weight_algorithm = weight_algorithm
         self.act_dtype = act_dtype
         self.act_sym = act_sym
         self.act_granularity = act_granularity
+        self.act_algorithm = act_algorithm
         self._post_init()
 
     @classmethod
@@ -91,32 +110,73 @@ class StaticQuantConfig(BaseConfig):
             weight_dtype=["int8", "fp32"],
             weight_sym=[True, False],
             weight_granularity=["per_tensor", "per_channel"],
+            weight_algorithm=["minmax", "kl"],
             act_dtype=["int8", "fp32"],
             act_sym=[True, False],
             act_granularity=["per_tensor", "per_channel"],
+            act_algorithm=["minmax", "kl"],
         )
         operators = [
-            tf.keras.layers.Dense,
-            tf.keras.layers.Conv2D,
-            tf.keras.layers.DepthwiseConv2D,
-            tf.keras.layers.SeparableConv2D,
-            tf.keras.layers.AvgPool2D,
-            tf.keras.layers.MaxPool2D,
-            tf.keras.layers.AveragePooling2D,
-            tf.keras.layers.MaxPooling2D,
+            tf.nn.conv2d,
+            tf.raw_ops.FusedBatchNormV3,
+            tf.nn.conv3d,
+            tf.raw_ops.MatMul,
+            tf.raw_ops.BatchMatMul,
+            tf.raw_ops.BatchMatMulV2,
+            tf.nn.depthwise_conv2d,
+            tf.raw_ops.ConcatV2,
+            tf.compat.v1.nn.fused_batch_norm,
+            tf.nn.max_pool,
+            tf.nn.avg_pool,
+            tf.compat.v1.nn.conv2d_backprop_input,
+            tf.raw_ops.Conv3DBackpropInputV2,
         ]
         supported_configs.append(OperatorConfig(config=static_quant_config, operators=operators))
         cls.supported_configs = supported_configs
 
+    @staticmethod
+    def get_model_info(model) -> List[Tuple[str, Callable]]:
+        white_list = [
+            "MatMul",
+            "Conv2D",
+            "Conv3D",
+            "_MklFusedInstanceNorm",
+            "BatchMatMul",
+            "BatchMatMulV2",
+            "DepthwiseConv2dNative",
+            "ConcatV2",
+            "FusedBatchNorm",
+            "FusedBatchNormV2",
+            "MaxPool",
+            "MaxPool3D",
+            "AvgPool",
+            "_MklFusedInstanceNorm",
+            "Conv2DBackpropInput",
+            "Conv2DBackpropInputV2",
+        ]
+        filter_result = []
+        for node in model.graph_def.node:
+            if node.op in white_list:
+                pair = (node.name, node.op)
+                filter_result.append(pair)
+        logger.debug(f"Get model info: {filter_result}")
+        return filter_result
+
     @classmethod
-    def get_config_set_for_tuning(
-        cls,
-    ) -> Union[None, "StaticQuantConfig", List["StaticQuantConfig"]]:  # pragma: no cover
-        # TODO fwk owner needs to update it.
-        return StaticQuantConfig(weight_sym=[True, False])
+    def get_config_set_for_tuning(cls) -> Union[None, "StaticQuantConfig", List["StaticQuantConfig"]]:
+        return StaticQuantConfig(
+            weight_dtype=["int8", "fp32"],
+            weight_sym=[True, False],
+            weight_granularity=["per_tensor", "per_channel"],
+            weight_algorithm=["minmax", "kl"],
+            act_dtype=["int8", "fp32"],
+            act_sym=[True, False],
+            act_granularity=["per_tensor", "per_channel"],
+            act_algorithm=["minmax", "kl"],
+        )
 
 
-register_supported_configs_for_fwk(fwk_name=FRAMEWORK_NAME)
+register_supported_configs_for_fwk(fwk_name="keras")
 
 
 def get_all_registered_configs() -> Dict[str, BaseConfig]:
@@ -125,19 +185,93 @@ def get_all_registered_configs() -> Dict[str, BaseConfig]:
     return registered_configs.get(FRAMEWORK_NAME, {})
 
 
-def parse_config_from_dict(config_dict: Dict) -> BaseConfig:
-    """Generate a BaseConfig instance from a dict."""
-    keras_registered_configs = get_all_registered_configs()
-    for key, val in config_dict.items():
-        if key in keras_registered_configs:
-            config = keras_registered_configs[key].from_dict(val)
-            return config
-
-
 def get_default_static_quant_config() -> StaticQuantConfig:
     """Generate the default static quant config.
 
     Returns:
-        the default keras config.
+        the default tf config.
     """
     return StaticQuantConfig()
+
+
+@register_config(framework_name=FRAMEWORK_NAME, algo_name=SMOOTH_QUANT)
+class SmoothQuantConfig(BaseConfig):
+    """Config class for tf smooth quantization."""
+
+    supported_configs: List[OperatorConfig] = []
+    params_list = [
+        "alpha",
+        "folding",
+        "percentile",
+        "op_types",
+        "scales_per_op",
+        "record_max_info",
+        "weight_clip",
+        "auto_alpha_args",
+    ]
+    name = SMOOTH_QUANT
+
+    def __init__(
+        self,
+        alpha: float = 0.5,
+        folding: bool = False,
+        percentile: float = 99.999,
+        op_types: list = ["MatMul", "Conv2D"],
+        scales_per_op: bool = True,
+        record_max_info: bool = False,
+        weight_clip: bool = True,
+        auto_alpha_args: Dict = DEFAULT_SQ_ALPHA_ARGS,
+        white_list: Optional[List[OP_NAME_OR_MODULE_TYPE]] = DEFAULT_WHITE_LIST,
+    ):
+        """Init RTN weight-only quantization config.
+
+        Args:
+            weight_dtype (str): Data type for weights, default is "int".
+        """
+        super().__init__()
+        self.alpha = alpha
+        self.folding = folding
+        self.percentile = percentile
+        self.op_types = op_types
+        self.scales_per_op = scales_per_op
+        self.record_max_info = record_max_info
+        self.weight_clip = weight_clip
+        self.auto_alpha_args = auto_alpha_args
+        self.white_list = white_list
+        self._post_init()
+
+    @classmethod
+    def register_supported_configs(cls) -> List[OperatorConfig]:
+        supported_configs = []
+        smooth_quant_config = SmoothQuantConfig()
+        operators = ["MatMul", "Conv2D"]
+        supported_configs.append(OperatorConfig(config=smooth_quant_config, operators=operators))
+        cls.supported_configs = supported_configs
+
+    @staticmethod
+    def get_model_info(model) -> List[Tuple[str, Callable]]:
+        white_list = ["MatMul", "Conv2D"]
+        filter_result = []
+        for node in model.graph_def.node:
+            if node.op in white_list:
+                pair = (node.name, node.op)
+                filter_result.append(pair)
+        logger.debug(f"Get model info: {filter_result}")
+        return filter_result
+
+    @classmethod
+    def get_config_set_for_tuning(cls) -> Union[None, "SmoothQuantConfig", List["SmoothQuantConfig"]]:
+        # TODO fwk owner needs to update it.
+        return SmoothQuantConfig(alpha=0.5)
+
+
+SmoothQuantConfig.register_supported_configs()
+
+
+def get_default_sq_config() -> SmoothQuantConfig:
+    """Generate the default rtn config.
+
+    Returns:
+        the default smooth quant config.
+    """
+    return SmoothQuantConfig()
