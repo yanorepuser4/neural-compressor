@@ -43,14 +43,16 @@ def _replace_with_custom_fn_if_matches_filter(
         else:
             new_fqn = f"{cur_fqn}.{name}"
         if filter_fn(child, new_fqn, config_mapping):
-            new_child = replacement_fn(child.to(auto_detect_accelerator().current_device()), new_fqn, config_mapping)
+            new_child = replacement_fn(
+                child.to(auto_detect_accelerator().current_device_name()), new_fqn, config_mapping
+            )
             logger.debug("Quantize linear module %s.", new_fqn)
             setattr(model, name, new_child)
         elif not _has_child(child):  # TODO: merge it into `filter_fn`
             if hqq_global_option.use_half:
                 logger.debug("Half module %s.", new_fqn)
                 child = child.half()
-            new_child = child.to(auto_detect_accelerator().current_device())
+            new_child = child.to(auto_detect_accelerator().current_device_name())
             setattr(model, name, new_child)
         else:
             _replace_with_custom_fn_if_matches_filter(

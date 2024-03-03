@@ -41,7 +41,7 @@ def optimize_weights_proximal_legacy(
         opt_params["kappa"],
         opt_params["iters"],
     )
-    device = auto_detect_accelerator().current_device()
+    device = auto_detect_accelerator().current_device_name()
 
     # TODO: refine it for cpu device
     if auto_detect_accelerator().name() == "cuda":

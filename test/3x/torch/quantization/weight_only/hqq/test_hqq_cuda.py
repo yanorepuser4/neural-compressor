@@ -22,7 +22,7 @@ def _common_cuda_test(nbits=4, group_size=64, quant_zero=True, quant_scale=False
     if quant_scale:
         scale_qconfig = QTensorConfig(nbits=8, channel_wise=True, group_size=scale_quant_group_size, optimize=False)
     hqq_quant_config = HQQModuleConfig(weight=weight_qconfig, scale=scale_qconfig, zero=zero_qconfig)
-    device = torch.cuda.current_device()
+    device = torch.cuda.current_device_name()
 
     # Create HQQ Linear
     bs = 4
@@ -68,7 +68,7 @@ class TestHQQCUDA:
 
         model = AutoModelForCausalLM.from_pretrained("facebook/opt-125m")
         example_inputs = torch.tensor(
-            [[10, 20, 30, 40, 50, 60]], dtype=torch.long, device=auto_detect_accelerator().current_device()
+            [[10, 20, 30, 40, 50, 60]], dtype=torch.long, device=auto_detect_accelerator().current_device_name()
         )
         # test_default_config
         quant_config = get_default_hqq_config()
