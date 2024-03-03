@@ -236,7 +236,10 @@ class HPU_Accelerator(Auto_Accelerator):
         return torch.hpu.device(device_index)
 
     def empty_cache(self):
-        return torch.hpu.empty_cache()
+        # HPU does not support empty_cache
+        # https://docs.habana.ai/en/latest/PyTorch/PyTorch_Model_Porting/GPU_Migration_Toolkit/Intel_Gaudi_GPU_Migration_APIs.html?highlight=empty_cache#hpu-mismatch
+        # return torch.hpu.empty_cache()
+        return None
 
 
 def auto_detect_accelerator(device_name="auto") -> Auto_Accelerator:
