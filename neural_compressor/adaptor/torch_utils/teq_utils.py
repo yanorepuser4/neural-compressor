@@ -24,17 +24,17 @@ class ScaleCalculator(torch.nn.Module):
         tensor2 = torch.ones(shape, device=device) * 0.5
         # torch.nn.init.normal_(tensor1)
         # torch.nn.init.normal_(tensor2)
-        self.sclae1 = torch.nn.Parameter(tensor1, requires_grad=True)
+        self.scale1 = torch.nn.Parameter(tensor1, requires_grad=True)
         self.scale2 = torch.nn.Parameter(tensor2, requires_grad=True)
 
     def forward(self, x):
-        update_scale = torch.clip(self.sclae1, min=0, max=1) / torch.clip(self.scale2, min=1e-5, max=1)
+        update_scale = torch.clip(self.scale1, min=0, max=1) / torch.clip(self.scale2, min=1e-5, max=1)
         # TODO: add more complex logic here
         return update_scale
 
     def get_final_scale(self):
         # TODO: add more complex logic here
-        return torch.clip(self.sclae1, min=0, max=1) / torch.clip(self.sclae2, min=1e-5, max=1)
+        return torch.clip(self.scale1, min=0, max=1) / torch.clip(self.sclae2, min=1e-5, max=1)
 
 
 # ScaleCalculatorVanilla
@@ -47,17 +47,17 @@ class ScaleCalculatorV(torch.nn.Module):
         # tensor2 = torch.ones(shape, device=device)
         # torch.nn.init.normal_(tensor1)
         # torch.nn.init.normal_(tensor2)
-        self.sclae1 = torch.nn.Parameter(tensor1, requires_grad=True)
+        self.scale1 = torch.nn.Parameter(tensor1, requires_grad=True)
         # self.scale2 = torch.nn.Parameter(tensor2, requires_grad=True)
 
     def forward(self, x):
-        update_scale = self.sclae1
+        update_scale = self.scale1
         # TODO: add more complicated logic here
         return update_scale
 
     def get_final_scale(self):
         # TODO: add more complicated logic here
-        return self.sclae1
+        return self.scale1
 
 
 from neural_compressor.utils import logger
