@@ -310,7 +310,14 @@ class TEQuantizer:
 
 
 def teq_quantize(
-    model, weight_config={}, absorb_to_layer={}, folding=True, dataloader=None, calib_func=None, example_inputs=None
+    model,
+    weight_config={},
+    absorb_to_layer={},
+    folding=True,
+    dataloader=None,
+    calib_func=None,
+    example_inputs=None,
+    train_steps=1000,
 ):
     """Run TEQ weight-only quantization."""
     assert isinstance(model, torch.nn.Module), "only support torch module"
@@ -339,7 +346,7 @@ def teq_quantize(
     else:
         if dataloader is None:  # pragma: no cover
             assert False, "Please provide dataloader to train."
-        teq_quantizer.train(dataloader)
+        teq_quantizer.train(dataloader, train_steps=train_steps)
 
     # 3. apply scale to model
     teq_quantizer.transform()

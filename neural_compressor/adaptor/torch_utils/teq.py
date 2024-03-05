@@ -37,6 +37,15 @@ from .teq_utils import ScaleCalculator
 from .weight_only import quant_weight
 
 
+def show_alphas(trained_alphas):
+    print("----------------------------------------------")
+    for layer_name, alpha in trained_alphas.items():
+        final_alpha = alpha.get_final_scale()
+        logger.info(
+            f"{layer_name}::: max: {final_alpha.max(): .4f}, min: {final_alpha.min(): .4f}, mean: {final_alpha.mean(): .4f}"
+        )
+
+
 class TEQuantizer:
     """Weight-only quantization, Trainable Equivalent Transformation (TEQ): linear wrapper to apply scale to input."""
 
@@ -48,7 +57,7 @@ class TEQuantizer:
         """
         self.model = model
         self.weight_config = weight_config
-        self.folding = extra_config.get("folding", True)
+        self.folding = False  # extra_config.get("folding", True)
         self.example_inputs = example_inputs
         self.device, self.dtype = self._get_device()
         self.model.eval()
@@ -112,17 +121,40 @@ class TEQuantizer:
                 if self.weight_config.get(n) is None:  # pragma: no cover
                     logger.info(f"out of absorbed layer {n} not in weight config, skip.")
                     continue
+                layer_name = n
+
                 num_bits = self.weight_config[layer_name]["bits"]
                 group_size = self.weight_config[layer_name]["group_size"]
                 scheme = self.weight_config[layer_name]["scheme"]
 
                 # alpha = torch.nn.Parameter(torch.ones(m.weight.shape[1], device=self.device))
                 alpha = ScaleCalculator(shape=m.weight.shape[1], device=self.device)
-                alpha.requires_grad_(False)
+                alpha.requires_grad_(True)
+                logger.info(f"add alpha to layer {n}")
+                self.trained_alphas[layer_name] = alpha
                 wrapper_module = TEQLinearFakeQuant(
                     orig_layer=m, alpha=alpha, num_bits=num_bits, group_size=group_size, scheme=scheme
                 )
                 set_module(self.model, n, wrapper_module)
+
+    @torch.no_grad()
+    def _apply_scales_wihout_folding(self, layer, scale, layer_name=""):
+        """Absorb the scale to the layer at output channel
+        :param layer: The module
+        :param scale: The scale to be absorbed
+        :param layer_name: The layer name."""
+        # for insert mul
+        if True:  # pragma: no cover
+            if isinstance(layer, MulLinear):
+                set_module(self.model, layer_name, layer.linear)  ##recover
+            else:
+                from .teq_utils import NewMulLinear
+
+                new_module = NewMulLinear(layer, scale)
+                set_module(self.model, layer_name, new_module)
+                logger.info(f"replace layer {layer_name} with NewMulLinear")
+            self.weight_config[layer_name + ".linear"] = self.weight_config[layer_name]
+            return
 
     @torch.no_grad()
     def _absorb_scales(self, layer, scale, layer_name=""):
@@ -228,18 +260,27 @@ class TEQuantizer:
                 self._scale_layer_weight(layer_module, weight_scale)
 
         # for Folding = True
-        for n, m in self.model.named_modules():
-            if isinstance(m, TEQLinearFakeQuant):
-                set_module(self.model, n, m.orig_layer)
+        for name, module in self.model.named_modules():
+            if isinstance(module, TEQLinearFakeQuant):
+                if name in self.trained_alphas:
+                    scale = self.trained_alphas[name]
+                    if isinstance(scale, ScaleCalculator):
+                        scale = scale.get_final_scale().detach()
+                    scale = torch.clip(scale, 1e-5)
+                    input_scale = 1.0 / scale
+                    self._apply_scales_wihout_folding(module.orig_layer, input_scale, layer_name=name)
+                else:
+                    set_module(self.model, name, module.orig_layer)
+        # import pdb; pdb.set_trace()
 
     def train(
         self,
         dataloader,
-        train_steps=1000,
+        train_steps=100,
         lr=1e-3,
         warmup_ratio=0.05,
         gradient_accumulation_steps=1,
-        logging_steps=10,
+        logging_steps=50,
         betas=[0.9, 0.9],
         weight_decay=0,
         lr_scheduler_type="linear",
@@ -248,6 +289,7 @@ class TEQuantizer:
         trained_alphas_list = []
         for item in self.trained_alphas.items():
             alpha = item[1]
+            # import pdb; pdb.set_trace()
             if isinstance(alpha, torch.nn.Parameter):
                 trained_alphas_list.append(item[1])
             elif isinstance(alpha, ScaleCalculator):
@@ -255,6 +297,7 @@ class TEQuantizer:
                 trained_alphas_list.extend(alpha.parameters())
             else:
                 raise ValueError(f"unsupported alpha type {type(alpha)}")
+        logger.info(f"trained_alphas_list len: {len(trained_alphas_list)}")
         optimizer = torch.optim.Adam(trained_alphas_list, lr=lr, weight_decay=weight_decay, betas=betas)
 
         lr_scheduler = transformers.get_scheduler(  # pylint: disable=E1111
@@ -285,6 +328,8 @@ class TEQuantizer:
 
                 if global_steps % logging_steps == 0:
                     logger.info("steps: {}, loss: {}".format(global_steps, loss.detach().cpu().item()))
+                    # logger.info("alpha: {}".format(trained_alphas_list[0].detach().cpu().numpy()))
+                    show_alphas(self.trained_alphas)
 
                 if global_steps % gradient_accumulation_steps == 0:
                     optimizer.step()

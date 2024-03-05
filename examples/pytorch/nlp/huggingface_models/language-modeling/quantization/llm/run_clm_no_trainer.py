@@ -71,6 +71,7 @@ parser.add_argument("--gptq_actorder", action="store_true",
 parser.add_argument('--gptq_percdamp', type=float, default=.01,
                     help='Percent of the average Hessian diagonal to use for dampening.')
 parser.add_argument('--gptq_block_size', type=int, default=128, help='Block size. sub weight matrix size to run GPTQ.')
+parser.add_argument('--train_steps', type=int, default=1000, help='train steps for TEQ')
 parser.add_argument('--gptq_nsamples', type=int, default=128, help='Number of calibration data samples.')
 parser.add_argument('--gptq_use_max_length', action="store_true",
                     help='Set all sequence length to be same length of args.gptq_pad_max_length')
@@ -199,7 +200,7 @@ class Evaluator:
 def get_user_model():
     from transformers import AutoModelForCausalLM, AutoModel, AutoTokenizer
     torchscript = False
-    if args.sq or args.ipex or args.woq_algo in ['AWQ', 'TEQ']:
+    if args.sq or args.ipex or args.woq_algo in ['AWQ']:
         torchscript = True
     user_model = AutoModelForCausalLM.from_pretrained(
         args.model,
@@ -220,7 +221,7 @@ def get_user_model():
         user_model = PeftModel.from_pretrained(user_model, args.peft_model_id)
 
     # to channels last
-    user_model = user_model.to(memory_format=torch.channels_last)
+    user_model = user_model.to(memory_format=torch.channels_last).to("cuda")
     user_model.eval()
     return user_model, tokenizer
 
@@ -325,15 +326,51 @@ if args.quantize:
                 acc = evaluator.evaluate(model)
                 return acc
 
-    q_model = quantization.fit(
-        user_model,
-        conf,
-        calib_dataloader=calib_dataloader,
-        calib_func=calib_func,
-        eval_func=eval_func,
-    )
+    # import pdb; pdb.set_trace()
+    if args.woq_algo in ["TEQ"]:
+        # weight_config = {
+        #     # 'op_name': (bit, group_size, scheme)
+        #     "transformer.h.0.mlp.fc_in": {"bits": 8, "group_size": -1, "scheme": "sym"},
+        #     "transformer.h.0.mlp.fc_out": {"bits": 4, "group_size": 32, "scheme": "asym"},
+        # }
+        # absorb_dict = {"transformer.h.0.mlp.fc_in": ["transformer.h.0.mlp.fc_out"]}
+        extra_config = {"folding": False}
+        from neural_compressor.adaptor.torch_utils.weight_only import teq_quantize
+        
+        # from eval_wiki import eval_wikitext2
+        # eval_wikitext2(user_model, tokenizer)
+        all_linear_module_name = []
 
-    q_model.save(args.output_dir)
+        def get_all_linears(model, prefix = ""):
+            for name, module in model.named_children():
+                if isinstance(module, torch.nn.Linear):
+                    # print(prefix + name)
+                    all_linear_module_name.append(prefix+name)
+                else:
+                    get_all_linears(module, prefix + name + ".")
+        get_all_linears(user_model)
+        default_weight_config = {"bits": 4, "group_size": 128, "scheme": "sym"}
+        weight_config = {name: default_weight_config for name in all_linear_module_name if "lm_head" not in name}
+        absorb_dict = {}
+        model = teq_quantize(
+            user_model,
+            weight_config=weight_config,
+            absorb_to_layer=absorb_dict,
+            extra_config=extra_config,
+            dataloader=calib_dataloader,
+            train_steps=args.train_steps,
+        )
+        from eval_wiki import eval_wikitext2
+        eval_wikitext2(model, tokenizer)
+    # q_model = quantization.fit(
+    #     user_model,
+    #     conf,
+    #     calib_dataloader=calib_dataloader,
+    #     calib_func=calib_func,
+    #     eval_func=eval_func,
+    # )
+
+    # q_model.save(args.output_dir)
 
 if args.int8 or args.int8_bf16_mixed:
     print("load int8 model")

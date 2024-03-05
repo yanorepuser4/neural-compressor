@@ -594,7 +594,14 @@ def awq_quantize(
 
 
 def teq_quantize(
-    model, weight_config={}, absorb_to_layer={}, extra_config={}, dataloader=None, calib_func=None, example_inputs=None
+    model,
+    weight_config={},
+    absorb_to_layer={},
+    extra_config={},
+    dataloader=None,
+    calib_func=None,
+    example_inputs=None,
+    train_steps=1000,
 ):
     """Run weight-only quantization with."""
     assert isinstance(model, torch.nn.Module), "only support torch module"
@@ -613,6 +620,12 @@ def teq_quantize(
 
     from .teq import TEQuantizer
 
+    first_input = example_inputs.to(model.device)
+
+    # Catch the one output for veirfy the transformation correctness
+    with torch.no_grad():
+        first_input_out = model(first_input)
+
     teq_quantizer = TEQuantizer(model, weight_config, absorb_to_layer, extra_config, example_inputs)
 
     # 1. wrapper tuning scale to model
@@ -625,10 +638,15 @@ def teq_quantize(
     else:
         if dataloader is None:  # pragma: no cover
             assert False, "Please provide dataloader to train."
-        teq_quantizer.train(dataloader)
+        teq_quantizer.train(dataloader, train_steps=train_steps)
 
     # 3. apply scale to model
     teq_quantizer.transform()
+
+    # Guard to make sure the transformation is correct
+    with torch.no_grad():
+        first_input_out_after = teq_quantizer.model(first_input)
+        assert torch.allclose(first_input_out.logits, first_input_out_after.logits, atol=1e-4)
 
     # 4. get quantized model
     teq_quantizer.quantize()

@@ -20,35 +20,106 @@ class ScaleCalculator(torch.nn.Module):
         super().__init__()
         self.shape = shape
         self.device = device
-        self.sclae = torch.nn.Parameter(torch.ones(shape, device=device))
+        tensor1 = torch.ones(shape, device=device)
+        tensor2 = torch.ones(shape, device=device)
+        # torch.nn.init.normal_(tensor1)
+        # torch.nn.init.normal_(tensor2)
+        self.sclae1 = torch.nn.Parameter(tensor1, requires_grad=True)
+        self.scale2 = torch.nn.Parameter(tensor2, requires_grad=True)
 
     def forward(self, x):
-        update_scale = self.sclae
+        update_scale = self.sclae1 / self.scale2
+        # TODO: add more complex logic here
+        return update_scale
+
+    def get_final_scale(self):
+        # TODO: add more complex logic here
+        return self.sclae1 / self.scale2
+
+
+# ScaleCalculatorVanilla
+class ScaleCalculatorV(torch.nn.Module):
+    def __init__(self, shape: int, device):
+        super().__init__()
+        self.shape = shape
+        self.device = device
+        tensor1 = torch.ones(shape, device=device)
+        # tensor2 = torch.ones(shape, device=device)
+        # torch.nn.init.normal_(tensor1)
+        # torch.nn.init.normal_(tensor2)
+        self.sclae1 = torch.nn.Parameter(tensor1, requires_grad=True)
+        # self.scale2 = torch.nn.Parameter(tensor2, requires_grad=True)
+
+    def forward(self, x):
+        update_scale = self.sclae1
         # TODO: add more complicated logic here
         return update_scale
 
     def get_final_scale(self):
         # TODO: add more complicated logic here
-        return self.sclae
+        return self.sclae1
 
 
-# Demos:
-# https://pytorch.org/tutorials/beginner/examples_nn/two_layer_net_module.html
-class Polynomial3(torch.nn.Module):
-    def __init__(self):
-        """In the constructor we instantiate four parameters and assign them as
-        member parameters."""
+from neural_compressor.utils import logger
+
+
+class NewMulLinear(torch.nn.Module):
+    def __init__(self, module, input_scale=None):
+        """A forward hook to save input max of a module
+        :param module: the linear module
+        :param input_scale: scale for input."""
         super().__init__()
-        self.a = torch.nn.Parameter(torch.randn(()))
-        self.b = torch.nn.Parameter(torch.randn(()))
-        self.c = torch.nn.Parameter(torch.randn(()))
-        self.d = torch.nn.Parameter(torch.randn(()))
+        if input_scale is None:
+            input_scale = torch.empty(module.in_features)
+        self.register_buffer("input_scale", input_scale)
+        scale = self.input_scale.view(1, self.input_scale.shape[0])
+        with torch.no_grad():
+            module.weight *= self.input_scale.unsqueeze(dim=0)
+        self.add_module("linear", module)
+        logger.info(f"NewMulLinear: {module} has been wrapped.")
 
-    def forward(self, x):
-        """In the forward function we accept a Tensor of input data and we must return
-        a Tensor of output data.
+    def forward(self, X):
+        shape_len = len(X.shape) - 1
+        inverse_scale_for_x = 1 / self.input_scale
+        inverse_scale_new_shape = (1,) * shape_len + (-1,)
+        inverse_scale_for_x = inverse_scale_for_x.view(inverse_scale_new_shape)
+        X = torch.mul(X, inverse_scale_for_x)
+        X = self.linear(X)
+        return X
 
-        We can use Modules defined in the constructor as
-        well as arbitrary operators on Tensors.
-        """
-        return self.a + self.b * x + self.c * x**2 + self.d * x**3
+    @property
+    def weight(self):
+        return self.linear.weight
+
+    @weight.setter
+    def weight(self, weight):
+        self.linear.weight = weight
+
+    @property
+    def bias(self):
+        return self.linear.bias
+
+    @bias.setter
+    def bias(self, bias):
+        self.linear.bias = bias
+
+
+@torch.no_grad()
+class TestNewMulLinear:
+    def test_new_mul_linear(self):
+        in_features = 10
+        out_features = 30
+        input_scale = torch.rand(in_features)
+        module = torch.nn.Linear(in_features, out_features)
+        inputs = torch.rand(2, in_features)
+        origial_out = module(inputs)
+        new_module = NewMulLinear(module, input_scale)
+
+        out = new_module(inputs)
+        print(out)
+        print(origial_out)
+        torch.allclose(out, origial_out)
+
+
+t = TestNewMulLinear()
+t.test_new_mul_linear()
