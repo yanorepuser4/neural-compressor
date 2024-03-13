@@ -32,9 +32,9 @@ class Direct8BitOperator(Operator):
 
     def quantize_check(self):
         """Check if quantizaion can be done."""
-        node = self.node
-        if not self.quantizer.is_valid_quantize_weight(node.input[0]):
-            return False
+        # node = self.node
+        # if not self.quantizer.is_valid_quantize_weight(node.input[0]):
+        #     return False
         return True
 
     def quantize(self):

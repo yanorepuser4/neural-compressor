@@ -632,9 +632,9 @@ class Quantizer:
                             "In static mode quantization params for inputs and outputs "
                             "of nodes to be quantized are required.".format(tensor_name)
                         )
-                    if direct_int8:
-                        if node.input[0] not in self.quantized_value_map:
-                            return
+                    # if direct_int8:
+                    #     if node.input[0] not in self.quantized_value_map:
+                    #         return
                     q_input = tensor_name
                     q_output = (
                         tensor_name + "_" + node.name + "_QuantizeLinear"
