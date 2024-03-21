@@ -33,6 +33,7 @@ from ..utils import logger
 from ..utils.utility import GLOBAL_STATE, MODE, CpuInfo, LazyImport, Statistics
 from .adaptor import Adaptor, adaptor_registry
 from .query import QueryBackendCapability
+from .torch_utils.util import get_device
 
 torch = LazyImport("torch")
 json = LazyImport("json")
@@ -4520,6 +4521,7 @@ class PyTorchWeightOnlyAdaptor(TemplateAdaptor):
     def __init__(self, framework_specific_info):
         super(PyTorchWeightOnlyAdaptor, self).__init__(framework_specific_info)
         self.tune_cfg = None
+        self.device = get_device("auto") # TODO : hard code
         if self.device == "cpu":
             query_config_file = "pytorch_cpu.yaml"
         else:  # pragma: no cover
