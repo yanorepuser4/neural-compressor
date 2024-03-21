@@ -204,6 +204,17 @@ class CUDA_Accelerator(Auto_Accelerator):
         return torch.cuda.empty_cache()
 
 
+# pylint:disable=import-error
+try:
+    import habana_frameworks.torch.hpex
+
+    _hpex_available = True
+except:
+    _hpex_available = False
+
+
+def is_hpex_available():
+    return _hpex_available
 @register_accelerator(name="hpu", priority=PRIORITY_HPU)
 class HPU_Accelerator(Auto_Accelerator):
     def __init__(self) -> None:
@@ -214,8 +225,6 @@ class HPU_Accelerator(Auto_Accelerator):
 
     @classmethod
     def is_available(cls) -> bool:
-        from .environ import is_hpex_available
-
         if is_hpex_available():
             return torch.hpu.is_available()
         else:
