@@ -681,7 +681,7 @@ def autoround_quantize(
     weight_config: dict = {},
     enable_full_range: bool = False,  ##for symmetric, TODO support later
     batch_size: int = 8,
-    amp: bool = True,
+    amp: bool = False,
     device=None,
     lr_scheduler=None,
     dataloader=None,  ## to support later
