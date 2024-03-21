@@ -4947,6 +4947,7 @@ class PyTorchWeightOnlyAdaptor(TemplateAdaptor):
             weight_config=weight_config,
             enable_full_range=enable_full_range,
             batch_size=batch_size,
+            device="hpu",  # TODO: release it later
             lr_scheduler=lr_scheduler,
             dataloader=dataloader,
             dataset_name=dataset_name,

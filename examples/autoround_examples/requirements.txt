@@ -1,1 +1,2 @@
-auto-round
+# auto-round
+git+https://github.com/intel/auto-round.git@d02f94d4b085523df3b313863fb07f83b2989cce
