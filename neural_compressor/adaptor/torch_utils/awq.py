@@ -20,6 +20,7 @@ from neural_compressor.adaptor.torch_utils.util import (
     fetch_module,
     get_absorb_layers,
     get_block_prefix,
+    get_device,
     get_example_input,
     get_hidden_states,
     get_module_input_output,
@@ -118,10 +119,12 @@ class ActAwareWeightQuant:
         enable_full_range=False,
         weight_config={},
     ):
+        self.model = model
         self.example_inputs = example_inputs
         if example_inputs is None:
             assert dataloader is not None, "datalaoder or example_inputs is required."
             self.example_inputs = get_example_input(dataloader)
+        self._move_model_and_data_to_device()
         # Step 1: get hidden states and kwargs of first block.
         self.total_block_args, self.total_block_kwargs = get_hidden_states(
             model, dataloader=dataloader, n_samples=n_samples, calib_func=calib_func
@@ -135,7 +138,12 @@ class ActAwareWeightQuant:
         self.scheme = scheme
         self.enable_full_range = enable_full_range
         self.weight_config = weight_config
-        self.model = model
+
+    def _move_model_and_data_to_device(self):
+        # Put the model and example_inputs into target device
+        device = get_device()
+        self.model.to(device)
+        self.example_inputs = self.example_inputs.to(device)
 
     def quantize(self, enable_auto_scale=True, enable_mse_search=True, folding=False, return_int=False):
         """Execute AWQ quantization.

@@ -24,7 +24,7 @@ from typing import OrderedDict
 
 from ...utils import logger
 from ...utils.utility import LazyImport
-from .util import set_module
+from .util import set_module, get_device
 
 tqdm = LazyImport("tqdm")
 torch = LazyImport("torch")
@@ -398,12 +398,13 @@ def rtn_quantize(
         model: fake quantized torch module
     """
     assert isinstance(model, torch.nn.Module), "only support torch module"
+    device = get_device(kwargs.pop("device", "auto"))
+    model.to(device)
     supported_layers = ["Linear"]
     if return_int:
         compression_dtype = kwargs.get("compression_dtype", torch.int32)
         compression_dim = kwargs.get("compression_dim", 1)
         scale_dtype = kwargs.get("scale_dtype", torch.float32)
-        device = kwargs.get("device", "cpu")
         use_optimum_format = kwargs.get("use_optimum_format", True)
     with torch.no_grad():
         for name, m in model.named_modules():
@@ -496,7 +497,7 @@ def gptq_quantize(
     nsamples=128,
     use_max_length=True,
     pad_max_length=2048,
-    device=None,
+    device="auto",
     layer_wise=False,
     model_path=None,
 ):

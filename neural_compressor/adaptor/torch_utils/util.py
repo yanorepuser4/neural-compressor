@@ -1331,3 +1331,10 @@ def get_hidden_states(model, dataloader=None, n_samples=128, calib_func=None):
     model.forward = model_forward_cache
     first_block.forward = block_forward_cache
     return total_block_args, total_block_kwargs
+
+def get_device(device_name="auto"):
+    from .auto_accelerator import auto_detect_accelerator
+
+    runtime_accelerator = auto_detect_accelerator(device_name)
+    device = runtime_accelerator.current_device_name()
+    return device

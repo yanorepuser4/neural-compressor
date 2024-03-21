@@ -34,7 +34,7 @@ from neural_compressor.adaptor.torch_utils.waq import get_module, set_module
 
 from .model_wrapper import MulLinear, TEQLinearFakeQuant
 from .weight_only import quant_weight
-
+from .util import get_device
 
 class TEQuantizer:
     """Weight-only quantization, Trainable Equivalent Transformation (TEQ): linear wrapper to apply scale to input."""
@@ -49,16 +49,23 @@ class TEQuantizer:
         self.weight_config = weight_config
         self.folding = extra_config.get("folding", True)
         self.example_inputs = example_inputs
-        self.device, self.dtype = self._get_device()
+        self.device = self._get_device()
+        self.dtype = self._get_dtype()
         self.model.eval()
         self.trained_alphas = {}
         self.absorb_to_layer = absorb_to_layer
 
+
     def _get_device(self):
         """Get the model device
         :return:Model device."""
+        device = get_device()
+        self.model.to(device)
+        return device
+
+    def _get_dtype(self):
         for _, p in self.model.named_parameters():
-            return p.data.device, p.data.dtype
+            return p.data.dtype
 
     def add_tuning_scale(self, sqrt_w_init=False):
         """The main entry of smooth quant

@@ -29,6 +29,7 @@ import transformers
 from tqdm import tqdm
 
 from ...utils import logger
+from .util import get_device
 
 DEBUG = False
 
@@ -196,7 +197,7 @@ class GPTQuantizer(object):
         nsamples=128,
         use_max_length=True,
         pad_max_length=2048,
-        device=None,
+        device="auto",
         layer_wise=False,
     ):
         """
@@ -215,7 +216,7 @@ class GPTQuantizer(object):
                 ...
             }
             dataloader: an iterable containing calibration datasets, contains (inputs, targets)
-            device: cpu or cuda
+            device: cpu or cuda or auto
         """
         # model
         self.model = model
@@ -239,9 +240,8 @@ class GPTQuantizer(object):
         self.check_layer_config()
 
         # device
-        self.device = device
-        if str(self.model.device).startswith("cuda"):
-            self.device = self.model.device
+        self.device = get_device(device)
+        self.model.to(self.device)
         self.is_ready = False
 
         self.layer_wise = layer_wise
