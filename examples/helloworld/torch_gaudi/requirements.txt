@@ -1,0 +1,5 @@
+auto_round
+neural-compressor>=2.3
+torch
+transformers>=4.34.0
+optimum[habana]
