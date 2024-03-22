@@ -1,6 +1,6 @@
 accelerate
 datasets
-transformers
+transformers==4.35.2
 huggingface-hub
 seqeval
 tensorboard
