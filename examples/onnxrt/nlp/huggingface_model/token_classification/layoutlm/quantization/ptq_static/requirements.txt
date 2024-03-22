@@ -13,7 +13,7 @@ textdistance==4.6.0
 shapely==2.0.2
 protobuf==4.23.4
 torch==2.1.1
-torchvision==0.16.0
+torchvision==0.16.1
 setuptools==68.0.0
 onnx
 onnxruntime
