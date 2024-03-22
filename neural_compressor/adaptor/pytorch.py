@@ -4521,11 +4521,11 @@ class PyTorchWeightOnlyAdaptor(TemplateAdaptor):
     def __init__(self, framework_specific_info):
         super(PyTorchWeightOnlyAdaptor, self).__init__(framework_specific_info)
         self.tune_cfg = None
-        self.device = get_device("auto") # TODO : hard code
         if self.device == "cpu":
             query_config_file = "pytorch_cpu.yaml"
         else:  # pragma: no cover
             assert False, "Unsupported this device {}".format(self.device)
+        self.device = get_device("auto") # TODO : hard code
         self.query_handler = PyTorchQuery(local_config_file=os.path.join(os.path.dirname(__file__), query_config_file))
 
         self.white_list = [torch.nn.Linear]
