@@ -4611,8 +4611,10 @@ class PyTorchWeightOnlyAdaptor(TemplateAdaptor):
             enable_mse_search = False
             group_dim = 1
             return_int = False
-        from .torch_utils.util import fetch_module, set_module
+        from .torch_utils.util import fetch_module, set_module, get_device
         from .torch_utils.weight_only import rtn_quantize
+        
+        model.to(get_device(self.device))
 
         # for layer_wise quant mode
         recipe_cfgs = tune_cfg.get("recipe_cfgs", None)
