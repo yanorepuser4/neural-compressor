@@ -423,10 +423,22 @@ class FP8Cast(torch.nn.Module):
         )
 
 
-FP8LinearLayer = FP8Linear
+class FP8LinearLayer(FP8Linear):
+    def __init__(self, org_module, dtype) -> None:
+        # attributes
+        org_module.in_features = org_module.weight.shape[1]
+        org_module.out_features = org_module.weight.shape[0]
+        super().__init__(org_module, dtype)
 
 
 class FP8LinearAllreduce(FP8Linear):
+    def __init__(self, org_module, dtype) -> None:
+        # attributes
+        org_module.in_features = org_module.weight.shape[1]
+        org_module.out_features = org_module.weight.shape[0]
+        super().__init__(org_module, dtype)
+        self.mp_group = org_module.mp_group
+
     def forward(self, inp):
         assert inp.shape[-1] == self.in_features, "GEMM not possible"
         inputmat = inp.view(-1, self.in_features)
@@ -453,6 +465,15 @@ class FP8LinearAllreduce(FP8Linear):
 
 
 class FP8LmHeadLinearAllreduce(FP8Linear):
+    def __init__(self, org_module, dtype) -> None:
+        # attributes
+        org_module.in_features = org_module.weight.shape[1]
+        org_module.out_features = org_module.weight.shape[0]
+        super().__init__(org_module, dtype)
+        self.mp_group = org_module.mp_group
+        self.rank = org_module.rank
+        self.world_size = org_module.world_size
+
     def forward(self, inp):
         # from deepspeed.module_inject.tp_shard import get_shard_size, get_shard_size_list
         # input_shard_size = get_shard_size(inp.shape[-1], self.world_size)

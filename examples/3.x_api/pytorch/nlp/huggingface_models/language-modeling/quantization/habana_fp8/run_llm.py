@@ -1,8 +1,8 @@
 import os
 os.environ["EXPERIMENTAL_WEIGHT_SHARING"] = "False"
 
-### USE_GAUDI2_SCALE requires PT_USE_FP8_AMAX for torch.mm/bmm, or got failure
-# os.environ["USE_GAUDI2_SCALE"] = "True"
+### USE_HW_SCALE requires PT_USE_FP8_AMAX for torch.mm/bmm, or got failure
+# os.environ["USE_HW_SCALE"] = "True"
 # os.environ["PT_USE_FP8_AMAX"] = "True"
 
 ### graphs will dump to .graph_dumps folder
