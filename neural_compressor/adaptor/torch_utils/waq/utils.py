@@ -87,9 +87,10 @@ def forward_wrapper(model, input, device=torch.device("cpu")):
 
 
 def model_forward(model, dataloader, iters, device):
+    logger.info(f"iters: {iters}")
     try:
         cnt = 0
-        for idx, (input, label) in enumerate(dataloader):
+        for idx, (input, label) in tqdm(enumerate(dataloader)):
             if input is None:
                 continue
             output = forward_wrapper(model, input, device)
@@ -98,7 +99,7 @@ def model_forward(model, dataloader, iters, device):
                 break
     except Exception as e:
         cnt = 0
-        for idx, input in enumerate(dataloader):
+        for idx, input in tqdm(enumerate(dataloader)):
             output = forward_wrapper(model, input, device)
             cnt += 1
             if iters != -1 and cnt >= iters:

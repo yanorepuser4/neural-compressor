@@ -324,16 +324,21 @@ if args.quantize:
             def eval_func(model):
                 acc = evaluator.evaluate(model)
                 return acc
+    
+    from neural_compressor.adaptor.torch_utils.waq import TorchSmoothQuant
+    from neural_compressor.adaptor.pytorch import get_example_inputs
+    example_inputs = get_example_inputs(model=user_model, dataloader=calib_dataloader)
+    sq = TorchSmoothQuant(user_model, calib_dataloader, example_inputs=example_inputs) 
+    sq.transform(alpha="auto", calib_iter=2, folding=True) 
+    # q_model = quantization.fit(
+    #     user_model,
+    #     conf,
+    #     calib_dataloader=calib_dataloader,
+    #     calib_func=calib_func,
+    #     eval_func=eval_func,
+    # )
 
-    q_model = quantization.fit(
-        user_model,
-        conf,
-        calib_dataloader=calib_dataloader,
-        calib_func=calib_func,
-        eval_func=eval_func,
-    )
-
-    q_model.save(args.output_dir)
+    # q_model.save(args.output_dir)
 
 if args.int8 or args.int8_bf16_mixed:
     print("load int8 model")
