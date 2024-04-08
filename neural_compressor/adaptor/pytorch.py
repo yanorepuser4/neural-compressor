@@ -4591,6 +4591,7 @@ class PyTorchWeightOnlyAdaptor(TemplateAdaptor):
         if "AUTOROUND" in all_algo:
             q_model._model, autoround_config = self.autoround_quantize(q_model._model, tune_cfg, dataloader)
             q_model.autoround_config = autoround_config
+            q_model.tune_cfg = tune_cfg
 
         q_model.q_config = copy.deepcopy(self.tune_cfg)
         q_model.is_quantized = True

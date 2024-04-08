@@ -592,6 +592,27 @@ class PyTorchModel(PyTorchBaseModel):
                     )
                     new_module.pack(int_weight, autoround_scale, autoround_zp, m.bias, None)
                     set_module(self.model, k, new_module)
+
+                v = self.tune_cfg["op"][("lm_head", "Linear")]["weight"]
+                dtype = v["dtype"]
+                num_bits = v["bits"]
+                group_size = v["group_size"]
+                scheme = v["scheme"]
+                new_module = rtn_quantize(
+                    m,
+                    num_bits,
+                    group_size,
+                    scheme,
+                    data_type=dtype,
+                    return_int=True,
+                    enable_full_range=enable_full_range,
+                    compression_dtype=compression_dtype,
+                    compression_dim=compression_dim,
+                    scale_dtype=scale_dtype,
+                    device=device,
+                    use_optimum_format=use_optimum_format,
+                )
+                set_module(self.model, "lm_head", new_module)
             else:
                 from auto_round.export.export_to_itrex.export import pack_model  # pylint: disable=E0401
 
@@ -605,6 +626,21 @@ class PyTorchModel(PyTorchBaseModel):
                     use_optimum_format=use_optimum_format,
                     inplace=True,
                 )
+                v = self.tune_cfg["op"][("lm_head", "Linear")]["weight"]
+                dtype = v["dtype"]
+                num_bits = v["bits"]
+                group_size = v["group_size"]
+                scheme = v["scheme"]
+                new_module = rtn_quantize(
+                    m,
+                    num_bits,
+                    group_size,
+                    scheme,
+                    data_type=dtype,
+                    return_int=True,
+                    device=device,
+                )
+                set_module(self.model, "lm_head", new_module)
         else:
             for k, v in weight_config.items():
                 logger.debug(f"Compressing {k} on device {device}")
