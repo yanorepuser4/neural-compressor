@@ -255,15 +255,26 @@ def get_example_inputs(tokenizer):
 
     example_inputs = encoded_input
     # print(f"example_inputs: {example_inputs}")
-
-    tuple_inputs = (example_inputs["input_ids"],)
+    input_ids = example_inputs["input_ids"]
+    input_ids_batch = torch.cat((input_ids, input_ids), dim=0)
+    print(f"input_ids_batch shape: {input_ids_batch.shape}")
+    tuple_inputs = (input_ids_batch,)
     return tuple_inputs
 
-if args.quantize:
-    # dataset
-    user_model, tokenizer = get_user_model()
-    calib_dataset = load_dataset(args.dataset, split="train")
+
+def simple_infer(model):
+    input1 = torch.randint(0, 1024, (4, 512), dtype=torch.int64)
+    input2 = torch.randint(0, 1024, (8, 512), dtype=torch.int64)
+    input3 = torch.randint(0, 1024, (8, 512), dtype=torch.int64)
+    input_lst = [input1, input2, input3]
+    for input in input_lst:
+        print(f"input shape: {input.shape}")
+        out = model(input)
+        print(out.logits.shape)
+
+def get_dataloader():
     # calib_dataset = datasets.load_from_disk('/your/local/dataset/pile-10k/') # use this if trouble with connecting to HF
+    calib_dataset = load_dataset(args.dataset, split="train")
     calib_dataset = calib_dataset.shuffle(seed=args.seed)
     calib_evaluator = Evaluator(calib_dataset, tokenizer, args.batch_size, pad_max=args.pad_max_length, is_calib=True)
     calib_dataloader = DataLoader(
@@ -272,7 +283,14 @@ if args.quantize:
         shuffle=False,
         collate_fn=calib_evaluator.collate_batch,
     )
+    return calib_dataloader
 
+
+if args.quantize:
+    # dataset
+    user_model, tokenizer = get_user_model()
+    calib_dataloader = get_dataloader()
+    # TODO: remove this flag before merge
     if os.environ.get("USE_PT2") == "1":
         from neural_compressor.torch.algorithms.pt2e_quant.core import W8A8StaticQuantizer
         from torch.export import Dim
@@ -281,11 +299,13 @@ if args.quantize:
         example_inputs = get_example_inputs(tokenizer)
         # prepare
         quant_config = None
-        batch = None
+        # TODO double-check if we pass the example_inputs with bs is 1, we can't specific batch with Dim.
+        batch = Dim(name="batch_size")
         seq_len = Dim(name="seq_len")
         dynamic_shapes = {"input_ids": (batch, seq_len)}
         prepare_model = w8a8_static_quantizer.prepare(user_model, quant_config, example_inputs=example_inputs,dynamic_shapes=dynamic_shapes)
         # calibrate
+        # infer_converted_model(prepare_model)
         for i in range(2):
             prepare_model(*example_inputs)
         # convert
@@ -297,6 +317,7 @@ if args.quantize:
         opt_model = torch.compile(converted_model)
         out = opt_model(*example_inputs)
         user_model = opt_model
+        simple_infer(user_model)
     
     # 3.x api
     elif args.approach == 'weight_only':
@@ -455,6 +476,7 @@ if args.quantize:
 
 
 if args.accuracy:
+    # * Note: for export model, the `eval` method is not available
     # user_model.eval()
     from intel_extension_for_transformers.transformers.llm.evaluation.lm_eval import evaluate, LMEvalParser
     eval_args = LMEvalParser(
