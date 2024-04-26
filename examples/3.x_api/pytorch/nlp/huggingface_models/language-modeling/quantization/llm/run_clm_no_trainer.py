@@ -249,6 +249,16 @@ def get_example_inputs_from_dataloader(dataloader):
         # tuple[tensor, tensor]
         return (batch[0],)
 
+def get_example_inputs(tokenizer):
+    text = "Hello, welcome to LLM world."
+    encoded_input = tokenizer(text, return_tensors="pt")
+
+    example_inputs = encoded_input
+    # print(f"example_inputs: {example_inputs}")
+
+    tuple_inputs = (example_inputs["input_ids"],)
+    return tuple_inputs
+
 if args.quantize:
     # dataset
     user_model, tokenizer = get_user_model()
@@ -267,7 +277,8 @@ if args.quantize:
         from neural_compressor.torch.algorithms.pt2e_quant.core import W8A8StaticQuantizer
         from torch.export import Dim
         w8a8_static_quantizer = W8A8StaticQuantizer()
-        example_inputs = get_example_inputs_from_dataloader(calib_dataloader)
+        # example_inputs = get_example_inputs_from_dataloader(calib_dataloader)
+        example_inputs = get_example_inputs(tokenizer)
         # prepare
         quant_config = None
         batch = None
@@ -444,7 +455,7 @@ if args.quantize:
 
 
 if args.accuracy:
-    user_model.eval()
+    # user_model.eval()
     from intel_extension_for_transformers.transformers.llm.evaluation.lm_eval import evaluate, LMEvalParser
     eval_args = LMEvalParser(
         model="hf", 
