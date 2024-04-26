@@ -220,6 +220,35 @@ def get_user_model():
     return user_model, tokenizer
 
 
+def test_quantizer_on_llm(self):
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from neural_compressor.torch.algorithms.pt2e_quant.core import W8A8StaticQuantizer
+    model_name = "facebook/opt-125m"
+    model = AutoModelForCausalLM.from_pretrained(model_name)
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    input_ids = tokenizer("Hello, my dog is cute", return_tensors="pt")["input_ids"]
+    example_inputs = (input_ids,)
+    quant_config = None
+    w8a8_static_quantizer = W8A8StaticQuantizer()
+    # prepare
+    prepare_model = w8a8_static_quantizer.prepare(model, quant_config, example_inputs=example_inputs)
+    # calibrate
+    for i in range(2):
+        prepare_model(*example_inputs)
+    # convert
+    converted_model = w8a8_static_quantizer.convert(prepare_model)
+    # inference
+    from torch._inductor import config
+
+    config.freezing = True
+    opt_model = torch.compile(converted_model)
+    out = opt_model(*example_inputs)
+
+def get_example_inputs_from_dataloader(dataloader):
+    for batch in dataloader:
+        # tuple[tensor, tensor]
+        return (batch[0],)
+
 if args.quantize:
     # dataset
     user_model, tokenizer = get_user_model()
@@ -234,8 +263,32 @@ if args.quantize:
         collate_fn=calib_evaluator.collate_batch,
     )
 
+    if os.environ.get("USE_PT2") == "1":
+        from neural_compressor.torch.algorithms.pt2e_quant.core import W8A8StaticQuantizer
+        from torch.export import Dim
+        w8a8_static_quantizer = W8A8StaticQuantizer()
+        example_inputs = get_example_inputs_from_dataloader(calib_dataloader)
+        # prepare
+        quant_config = None
+        batch = None
+        seq_len = Dim(name="seq_len")
+        dynamic_shapes = {"input_ids": (batch, seq_len)}
+        prepare_model = w8a8_static_quantizer.prepare(user_model, quant_config, example_inputs=example_inputs,dynamic_shapes=dynamic_shapes)
+        # calibrate
+        for i in range(2):
+            prepare_model(*example_inputs)
+        # convert
+        converted_model = w8a8_static_quantizer.convert(prepare_model)
+        # inference
+        from torch._inductor import config
+
+        config.freezing = True
+        opt_model = torch.compile(converted_model)
+        out = opt_model(*example_inputs)
+        user_model = opt_model
+    
     # 3.x api
-    if args.approach == 'weight_only':
+    elif args.approach == 'weight_only':
         from neural_compressor.torch.quantization import RTNConfig, GPTQConfig, quantize
         from neural_compressor.torch.utils import get_double_quant_config
         weight_sym = True if args.woq_scheme == "sym" else False
