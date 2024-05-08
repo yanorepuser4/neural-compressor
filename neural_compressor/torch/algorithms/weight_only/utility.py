@@ -48,6 +48,7 @@ __all__ = [
     "quantize_4bit",
     "search_clip",
     "set_module",
+    "convert_format",
 ]
 
 NF4 = [
@@ -1068,3 +1069,10 @@ def get_module_input_output(
     for h in hook_list:
         h.remove()
     return total_values
+
+
+def convert_format(model, input_format="auto_gptq", output_format="auto_awq"):
+    from .utils.converter import FormatConverter
+
+    converter = FormatConverter()
+    converter.convert(model, input_format=input_format, output_format=output_format)

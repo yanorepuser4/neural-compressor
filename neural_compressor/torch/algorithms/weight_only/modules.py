@@ -27,6 +27,14 @@ from neural_compressor.torch.utils import logger
 
 from .utility import quant_tensor
 
+__all__ = [
+    "QDQLayer",
+    "WeightOnlyLinear",
+    "FakeAffineTensorQuantFunction",
+    "TEQLinearFakeQuant",
+    "MulLinear",
+]
+
 
 class QDQLayer(torch.nn.Module):
     def __init__(self, module, input_scale=None) -> None:
