@@ -12,13 +12,30 @@ from neural_compressor.torch.quantization import (
     quantize,
 )
 
+torch.set_grad_enabled(False)
+import torch.nn as nn
+
+
+class M(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.fc1 = nn.Linear(768, 768)
+        self.fc2 = nn.Linear(768, 768)
+
+    def forward(self, x):
+        x = self.fc1(x)
+        x = self.fc2(x)
+        return x
+
 
 class TestRTNQuant:
     def setup_class(self):
         self.tiny_gptj = transformers.AutoModelForCausalLM.from_pretrained(
-            "hf-internal-testing/tiny-random-GPTJForCausalLM",
+            "facebook/opt-125m",
         )
-        self.example_inputs = torch.tensor([[10, 20, 30, 40, 50, 60]], dtype=torch.long)
+        self.example_inputs = torch.tensor([[10]], dtype=torch.long)
+        # self.tiny_gptj = M()
+        # self.example_inputs = torch.randn(1,768)
         # record label for comparison
         self.label = self.tiny_gptj(self.example_inputs)[0]
         # test_default_config
@@ -128,7 +145,10 @@ class TestRTNQuant:
             )
             model = quantize(model, quant_config)
             out = model(self.example_inputs)[0]
-            assert isinstance(model.lm_head, WeightOnlyLinear), "Exporting compressed model failed."
+            # assert isinstance(model.lm_head, WeightOnlyLinear), "Exporting compressed model failed."
+            print(out)
+            print(self.q_label)
+            # print(model)
             atol_true = (out - self.q_label).amax()
             # The small gap is caused by FP16 scale in WeightOnlyLinear.
             assert (

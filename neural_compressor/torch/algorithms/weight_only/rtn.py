@@ -141,12 +141,18 @@ def rtn_quantize(
         logger.debug(f"RTN quantized module:{name, m}")
         logger.debug(log_msg)
         if group_dim == 0:
-            weight = m.weight.t_().contiguous()
+            weight = m.weight.T.contiguous()
         else:
             weight = m.weight
         if use_mse_search:
             quantile = search_clip(m, bits, group_size, scheme, dtype, use_full_range)
         if export_compressed_model:
+            # if getattr(self.config, "tie_word_embeddings", True)
+            if "lm_head" in name:
+                import copy
+
+                unlinked_weight = copy.deepcopy(weight)  # lm_head weight is linked from embedding
+                weight = unlinked_weight
             int_weight, scale, zp = quant_tensor(
                 weight,
                 dtype=dtype,
@@ -158,9 +164,10 @@ def rtn_quantize(
                 full_range=use_full_range,
                 **double_quant_config,
             )
-            int_weight = int_weight.t_().contiguous() if group_dim == 0 else int_weight
-            scale = scale.t_().contiguous() if group_dim == 0 else scale
-            zp = zp.t_().contiguous() if group_dim == 0 and zp is not None else zp
+            print(m)
+            int_weight = int_weight.T.contiguous() if group_dim == 0 else int_weight
+            scale = scale.T.contiguous() if group_dim == 0 else scale
+            zp = zp.T.contiguous() if group_dim == 0 and zp is not None else zp
             from .modules import WeightOnlyLinear
 
             new_module = WeightOnlyLinear(
@@ -180,6 +187,11 @@ def rtn_quantize(
             else:
                 set_module(model, name, new_module)
         else:
+            if "lm_head" in name:
+                import copy
+
+                unlinked_weight = copy.deepcopy(weight)  # lm_head weight is linked from embedding
+                weight = unlinked_weight
             weight = quant_tensor(
                 weight,
                 dtype=dtype,
@@ -192,7 +204,10 @@ def rtn_quantize(
             )
             if group_dim == 0:
                 # for group_dim is 0, we need to transpose the quantized tensor and module's weight back
-                weight = weight.t_().contiguous()
-                m.weight.t_().contiguous()
-            m.weight.data.copy_(weight)
+                weight = weight.T.contiguous()
+                m.weight.T.contiguous()
+            if "lm_head" in name:
+                m.weight = weight
+            else:
+                m.weight.data.copy_(weight)
     return model
