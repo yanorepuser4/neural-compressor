@@ -34,13 +34,15 @@ def run_fn(model):
 
 class TestGPTQQuant:
     def setup_class(self):
+        # GPTQ sets model on Host (CPU) and uses layer-wise quantization on GPU, the returned model is on CPU
         self.tiny_gptj = transformers.AutoModelForCausalLM.from_pretrained(
             "hf-internal-testing/tiny-random-GPTJForCausalLM",
-            device_map=device,
         )
         self.example_inputs = torch.tensor([[10, 20, 30, 40, 50, 60]], dtype=torch.long).to(device)
         # record label for comparison
+        self.tiny_gptj.to(device)
         self.label = self.tiny_gptj(self.example_inputs)[0]
+        self.tiny_gptj.to("cpu")
 
     def teardown_class(self):
         shutil.rmtree("saved_results", ignore_errors=True)
@@ -49,9 +51,12 @@ class TestGPTQQuant:
         # test_default_rtn_config
         model = copy.deepcopy(self.tiny_gptj)
         quant_config = get_default_rtn_config()
+        # auto detect device for quantization
         model = prepare(model, quant_config)
         run_fn_for_rtn(model)
         model = convert(model)
+        # set device for inference
+        model.to(device)
         rtn_label = model(self.example_inputs)[0]
         rtn_atol = (rtn_label - self.label).amax()
         # test_default_gptq_config
@@ -60,6 +65,7 @@ class TestGPTQQuant:
         model = prepare(model, quant_config)
         run_fn(model)
         model = convert(model)
+        model.to(device)
         gptq_label = model(self.example_inputs)[0]
         gptq_atol = (gptq_label - self.label).amax()
         # 0.05 VS 0.08
@@ -74,6 +80,7 @@ class TestGPTQQuant:
         model = prepare(model, quant_config)
         run_fn(model)
         model = convert(model)
+        model.to(device)
         gptq_label = model(self.example_inputs)[0]
         gptq_atol_1 = (gptq_label - self.label).amax()
 
@@ -81,6 +88,7 @@ class TestGPTQQuant:
         model = copy.deepcopy(self.tiny_gptj)
         quant_config = get_default_gptq_config()
         model = quantize(model, quant_config, run_fn=run_fn)
+        model.to(device)
         gptq_label = model(self.example_inputs)[0]
         gptq_atol_2 = (gptq_label - self.label).amax()
 
@@ -111,6 +119,7 @@ class TestGPTQQuant:
         model = prepare(model, quant_config)
         run_fn(model)
         model = convert(model)
+        model.to(device)
         out = model(self.example_inputs)[0]
         assert (out != self.label).all(), "WOQ output should be different with raw output"
         if (bits, use_sym, group_size) == (8, True, 128):
@@ -129,6 +138,7 @@ class TestGPTQQuant:
         model = prepare(model, quant_config)
         run_fn(model)
         model = convert(model)
+        model.to(device)
         out = model(self.example_inputs)[0]
         atol_false = (out - self.label).amax()
         # use_mse_search=True
@@ -139,6 +149,7 @@ class TestGPTQQuant:
         model = prepare(model, quant_config)
         run_fn(model)
         model = convert(model)
+        model.to(device)
         out = model(self.example_inputs)[0]
         atol_true = (out - self.label).amax()
         # compare atol, this case is an ideal case.
@@ -155,6 +166,7 @@ class TestGPTQQuant:
         model = prepare(model, quant_config)
         run_fn(model)
         model = convert(model)
+        model.to(device)
         out = model(self.example_inputs)[0]
         atol_false = (out - self.label).amax()
         # act_order=True
@@ -165,6 +177,7 @@ class TestGPTQQuant:
         model = prepare(model, quant_config)
         run_fn(model)
         model = convert(model)
+        model.to(device)
         out = model(self.example_inputs)[0]
         atol_true = (out - self.label).amax()
         # compare atol, this case is an ideal case.
@@ -196,6 +209,7 @@ class TestGPTQQuant:
         model = prepare(model, quant_config)
         run_fn(model)
         model = convert(model)
+        model.to(device)
         out = model(self.example_inputs)[0]
         atol_false = (out - self.label).amax()
         model = copy.deepcopy(self.tiny_gptj)
@@ -210,6 +224,7 @@ class TestGPTQQuant:
         model = prepare(model, quant_config)
         run_fn(model)
         model = convert(model)
+        model.to(device)
         out = model(self.example_inputs)[0]
         atol_true = (out - self.label).amax()
         # compare atol, this case is not an ideal case.
@@ -249,12 +264,14 @@ class TestGPTQQuant:
         q_model = convert(prepared_model)
         assert q_model is not None, "Quantization failed!"
         q_model.save("saved_results")
+        q_model.to(device)
         inc_out = q_model(self.example_inputs)[0]
 
         from neural_compressor.torch.quantization import load
 
         # loading compressed model
         loaded_model = load("saved_results")
+        loaded_model.to(device)
         loaded_out = loaded_model(self.example_inputs)[0]
         assert torch.allclose(inc_out, loaded_out), "Unexpected result. Please double check."
         assert isinstance(
