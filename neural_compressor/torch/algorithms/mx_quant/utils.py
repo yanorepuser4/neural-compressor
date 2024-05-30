@@ -21,6 +21,7 @@
 
 from enum import Enum, IntEnum
 import torch
+from neural_compressor.torch.utils import device_synchronize
 
 FP32_EXPONENT_BIAS = 127
 FP32_MIN_NORMAL = 2 ** (-FP32_EXPONENT_BIAS + 1)
@@ -97,12 +98,14 @@ class RoundingMode(IntEnum):
         return [s.name for s in list(RoundingMode)]
 
 
+@device_synchronize
 def _get_min_norm(ebits):
     """Valid for all float formats."""
     emin = 2 - (2 ** (ebits - 1))
     return 0 if ebits == 0 else 2**emin
 
 
+@device_synchronize
 def _get_max_norm(ebits, mbits):
     """Valid only for floats that define NaN."""
     assert ebits >= 5, "invalid for floats that don't define NaN"
@@ -182,6 +185,7 @@ def _get_format_params(fmt):
 
 # Never explicitly compute 2**(-exp) since subnorm numbers have
 # exponents smaller than -126
+@device_synchronize
 def _safe_lshift(x, bits, exp):
     if exp is None:
         return x * (2**bits)
@@ -189,6 +193,7 @@ def _safe_lshift(x, bits, exp):
         return x / (2**exp) * (2**bits)
 
 
+@device_synchronize
 def _safe_rshift(x, bits, exp):
     if exp is None:
         return x / (2**bits)
@@ -196,6 +201,7 @@ def _safe_rshift(x, bits, exp):
         return x / (2**bits) * (2**exp)
 
 
+@device_synchronize
 def _round_mantissa(A, bits, round, clamp=False):
     """
     Rounds mantissa to nearest bits depending on the rounding method 'round'
@@ -230,6 +236,7 @@ def _round_mantissa(A, bits, round, clamp=False):
     return A
 
 
+@device_synchronize
 def _shared_exponents(A, method="max", axes=None, ebits=0):
     """Get shared exponents for the passed matrix A.
 
@@ -272,6 +279,7 @@ def _shared_exponents(A, method="max", axes=None, ebits=0):
     return shared_exp
 
 
+@device_synchronize
 def _reshape_to_blocks(A, axes, block_size):
     if axes is None:
         raise Exception("axes required in order to determine which " "dimension to apply block size to")
@@ -331,6 +339,7 @@ def _reshape_to_blocks(A, axes, block_size):
     return A, axes, orig_shape, padded_shape
 
 
+@device_synchronize
 def _undo_reshape_to_blocks(A, padded_shape, orig_shape, axes):
     # Undo tile reshaping
     A = A.view(padded_shape)
@@ -344,6 +353,7 @@ def _undo_reshape_to_blocks(A, padded_shape, orig_shape, axes):
     return A
 
 
+@device_synchronize
 def _quantize_elemwise_core(A, bits, exp_bits, max_norm, round="nearest", saturate_normals=False, allow_denorm=True):
     """Core function used for element-wise quantization
     Arguments:
@@ -399,6 +409,7 @@ def _quantize_elemwise_core(A, bits, exp_bits, max_norm, round="nearest", satura
     return out
 
 
+@device_synchronize
 def _quantize_fp(A, exp_bits=None, mantissa_bits=None, round="nearest", allow_denorm=True):
     """Quantize values to IEEE fpX format.
 
@@ -423,6 +434,7 @@ def _quantize_fp(A, exp_bits=None, mantissa_bits=None, round="nearest", allow_de
     return output
 
 
+@device_synchronize
 def _quantize_bfloat(A, bfloat, round="nearest", allow_denorm=True):
     """Quantize values to bfloatX format
     Arguments:
@@ -441,6 +453,7 @@ def _quantize_bfloat(A, bfloat, round="nearest", allow_denorm=True):
     )
 
 
+@device_synchronize
 def quantize_elemwise_op(A, mx_specs):
     """A function used for element-wise quantization with mx_specs
     Arguments:
@@ -465,6 +478,7 @@ def quantize_elemwise_op(A, mx_specs):
     return A
 
 
+@device_synchronize
 def quantize_mx_op(
     A,
     elem_format: str,  # can be None for no quantization

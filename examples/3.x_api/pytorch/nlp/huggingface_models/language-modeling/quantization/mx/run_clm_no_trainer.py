@@ -6,11 +6,26 @@ import torch
 from neural_compressor.torch.utils import accelerator
 
 device = accelerator.current_device_name()
-if device.name == "hpu":
+if "hpu" in device.name:
     import habana_frameworks.torch.hpex
     import habana_frameworks.torch.core as htcore
+    from habana_frameworks.torch.hpu import memory_stats
+    import numpy as np
+    import glob
     htcore.hpu_set_env()
     torch.device('hpu')
+
+    def show_msg():
+        print("Number of HPU graphs:", len(glob.glob(".graph_dumps/*PreGraph*")))
+        mem_stats = memory_stats()
+        mem_dict = {
+            "memory_allocated (GB)": np.round(mem_stats["InUse"] / 1024**3, 2),
+            "max_memory_allocated (GB)": np.round(mem_stats["MaxInUse"] / 1024**3, 2),
+            "total_memory_available (GB)": np.round(mem_stats["Limit"] / 1024**3, 2),
+        }
+        for k, v in mem_dict.items():
+            print("{:35} = {} GB".format(k[:-5].replace("_", " ").capitalize(), v))
+
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
@@ -72,10 +87,12 @@ if args.quantize:
     quant_config = MXQuantConfig(w_dtype=args.w_dtype, act_dtype=args.act_dtype, weight_only=args.woq)
     user_model = quantize(model=user_model, quant_config=quant_config)
 
-# inference optimization
-if args.to_graph and device.name == "hpu":
-    import habana_frameworks.torch.hpu.graphs as htgraphs
-    user_model = htgraphs.wrap_in_hpu_graph(user_model)
+if "hpu" in device.name:
+    if args.to_graph:
+        # inference optimization
+        import habana_frameworks.torch.hpu.graphs as htgraphs
+        user_model = htgraphs.wrap_in_hpu_graph(user_model)
+    show_msg()
 
 if args.accuracy:
     from intel_extension_for_transformers.transformers.llm.evaluation.lm_eval import evaluate, LMEvalParser
