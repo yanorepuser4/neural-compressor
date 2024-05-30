@@ -1,6 +1,12 @@
 import argparse
 import time
 import json
+import sys
+import torch
+import habana_frameworks.torch.hpex
+import habana_frameworks.torch.core as htcore
+htcore.hpu_set_env()
+torch.device('hpu')
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
@@ -37,12 +43,28 @@ parser.add_argument("--peft_model_id", type=str, default=None, help="model_name_
 
 args = parser.parse_args()
 
+def show_msg():
+    import numpy as np
+    import glob
+    from habana_frameworks.torch.hpu import memory_stats
+    print("Number of HPU graphs:", len(glob.glob(".graph_dumps/*PreGraph*")))
+    mem_stats = memory_stats()
+    mem_dict = {
+        "memory_allocated (GB)": np.round(mem_stats["InUse"] / 1024**3, 2),
+        "max_memory_allocated (GB)": np.round(mem_stats["MaxInUse"] / 1024**3, 2),
+        "total_memory_available (GB)": np.round(mem_stats["Limit"] / 1024**3, 2),
+    }
+    for k, v in mem_dict.items():
+        print("{:35} = {} GB".format(k[:-5].replace("_", " ").capitalize(), v))
+
+
 def get_user_model():
     from transformers import AutoModelForCausalLM, AutoModel, AutoTokenizer
     user_model = AutoModelForCausalLM.from_pretrained(
         args.model,
         trust_remote_code=args.trust_remote_code,
         revision=args.revision,
+        device_map='hpu',
     )
     tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=args.trust_remote_code)
 
@@ -53,37 +75,40 @@ def get_user_model():
     user_model.eval()
     return user_model, tokenizer
 
+# show_msg()
 user_model, tokenizer = get_user_model()
 if args.quantize:
     from neural_compressor.torch.quantization import MXQuantConfig, quantize
     quant_config = MXQuantConfig(w_dtype=args.w_dtype, act_dtype=args.act_dtype, weight_only=args.woq)
     user_model = quantize(model=user_model, quant_config=quant_config)
 
-
+show_msg()
 if args.accuracy:
-    user_model.eval()
     from intel_extension_for_transformers.transformers.llm.evaluation.lm_eval import evaluate, LMEvalParser
-    args = LMEvalParser(
+    eval_args = LMEvalParser(
         model="hf",
         user_model=user_model,
         tokenizer=tokenizer,
         batch_size=args.batch_size,
         tasks=args.tasks,
-        device="cpu",
+        device="hpu",
+        limit=10,
     )
-    results = evaluate(args)
+    results = evaluate(eval_args)
     dumped = json.dumps(results, indent=2)
     if args.save_accuracy_path:
         with open(args.save_accuracy_path, "w") as f:
             f.write(dumped)
-    for task_name in args.tasks:
-        if task_name == "wikitext":
-            acc = results["results"][task_name]["word_perplexity"]
-        else:
-            acc = results["results"][task_name]["acc"]
-    print("Accuracy: %.5f" % acc)
-    print('Batch size = %d' % args.batch_size)
 
+    if args.tasks == "wikitext":
+        print("Accuracy for %s is: %s" %
+              (args.tasks, results["results"][args.tasks]["word_perplexity,none"]))
+        eval_acc += results["results"][args.tasks]["word_perplexity,none"]
+    else:
+        print("Accuracy for %s is: %s" %
+              (args.tasks, results["results"][args.tasks]["acc,none"]))
+        eval_acc += results["results"][args.tasks]["acc,none"]
+show_msg()
 if args.performance:
     user_model.eval()
     from intel_extension_for_transformers.llm.evaluation.lm_eval import evaluate

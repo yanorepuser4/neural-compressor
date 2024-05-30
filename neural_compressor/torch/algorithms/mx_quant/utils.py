@@ -20,7 +20,6 @@
 
 
 from enum import Enum, IntEnum
-
 import torch
 
 FP32_EXPONENT_BIAS = 127
@@ -466,20 +465,22 @@ def quantize_elemwise_op(A, mx_specs):
     return A
 
 
-def _quantize_mx(
+def quantize_mx_op(
     A,
-    scale_bits,
-    elem_format,  # can be None for no quantization
-    shared_exp_method="max",
+    elem_format: str,  # can be None for no quantization
+    round: str = "nearest",
+    block_size: int = 32,
+    scale_bits: int = 8,
+    shared_exp_method: str = "max",
+    flush_fp32_subnorms: bool = False,
     axes=None,
-    block_size=32,
-    round="nearest",
-    flush_fp32_subnorms=False,
 ):
     """Function used for MX* quantization."""
     # Shortcut for no quantization
     if elem_format is None:
         return A
+    elif type(elem_format) is str:
+        elem_format = ElemFormat.from_str(elem_format)
 
     assert scale_bits > 0
 
@@ -527,29 +528,3 @@ def _quantize_mx(
     A = _undo_reshape_to_blocks(A, padded_shape, orig_shape, axes)
 
     return A
-
-
-def quantize_mx_op(
-    A,
-    elem_format: str,
-    round: str,
-    block_size: int,
-    scale_bits=8,
-    axes=None,
-    expand_and_reshape=False,
-):
-    if elem_format is None:
-        return A
-    elif type(elem_format) is str:
-        elem_format = ElemFormat.from_str(elem_format)
-
-    return _quantize_mx(
-        A,
-        scale_bits,
-        elem_format,
-        block_size=block_size,
-        axes=axes,
-        round=round,
-        shared_exp_method="max",
-        flush_fp32_subnorms=False,
-    )

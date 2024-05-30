@@ -28,7 +28,8 @@ from neural_compressor.torch.algorithms import Quantizer
 from neural_compressor.torch.utils import logger, set_module
 
 from .utils import quantize_elemwise_op, quantize_mx_op
-
+import habana_frameworks.torch.core as htcore
+import habana_frameworks.torch.hpex
 
 class MXLinear(torch.nn.Linear):
     def __init__(
