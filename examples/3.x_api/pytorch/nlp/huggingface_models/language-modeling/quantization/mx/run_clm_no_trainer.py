@@ -3,10 +3,14 @@ import time
 import json
 import sys
 import torch
-import habana_frameworks.torch.hpex
-import habana_frameworks.torch.core as htcore
-htcore.hpu_set_env()
-torch.device('hpu')
+from neural_compressor.torch.utils import accelerator
+
+device = accelerator.current_device_name()
+if device.name == "hpu":
+    import habana_frameworks.torch.hpex
+    import habana_frameworks.torch.core as htcore
+    htcore.hpu_set_env()
+    torch.device('hpu')
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
@@ -37,25 +41,12 @@ parser.add_argument("--batch_size", default=1, type=int,
                     help="For accuracy measurement only.")
 parser.add_argument("--save_accuracy_path", default=None,
                     help="Save accuracy results path.")
-parser.add_argument("--tasks", type=str, default="lambada_openai",
+parser.add_argument("--tasks", type=str, default=["lambada_openai"],
                     help="tasks list for accuracy validation")
 parser.add_argument("--peft_model_id", type=str, default=None, help="model_name_or_path of peft model")
+parser.add_argument("--to_graph", action="store_true")
 
 args = parser.parse_args()
-
-def show_msg():
-    import numpy as np
-    import glob
-    from habana_frameworks.torch.hpu import memory_stats
-    print("Number of HPU graphs:", len(glob.glob(".graph_dumps/*PreGraph*")))
-    mem_stats = memory_stats()
-    mem_dict = {
-        "memory_allocated (GB)": np.round(mem_stats["InUse"] / 1024**3, 2),
-        "max_memory_allocated (GB)": np.round(mem_stats["MaxInUse"] / 1024**3, 2),
-        "total_memory_available (GB)": np.round(mem_stats["Limit"] / 1024**3, 2),
-    }
-    for k, v in mem_dict.items():
-        print("{:35} = {} GB".format(k[:-5].replace("_", " ").capitalize(), v))
 
 
 def get_user_model():
@@ -64,7 +55,7 @@ def get_user_model():
         args.model,
         trust_remote_code=args.trust_remote_code,
         revision=args.revision,
-        device_map='hpu',
+        device_map=device,
     )
     tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=args.trust_remote_code)
 
@@ -75,14 +66,17 @@ def get_user_model():
     user_model.eval()
     return user_model, tokenizer
 
-# show_msg()
 user_model, tokenizer = get_user_model()
 if args.quantize:
     from neural_compressor.torch.quantization import MXQuantConfig, quantize
     quant_config = MXQuantConfig(w_dtype=args.w_dtype, act_dtype=args.act_dtype, weight_only=args.woq)
     user_model = quantize(model=user_model, quant_config=quant_config)
 
-show_msg()
+# inference optimization
+if args.to_graph and device.name == "hpu":
+    import habana_frameworks.torch.hpu.graphs as htgraphs
+    user_model = htgraphs.wrap_in_hpu_graph(user_model)
+
 if args.accuracy:
     from intel_extension_for_transformers.transformers.llm.evaluation.lm_eval import evaluate, LMEvalParser
     eval_args = LMEvalParser(
@@ -90,9 +84,8 @@ if args.accuracy:
         user_model=user_model,
         tokenizer=tokenizer,
         batch_size=args.batch_size,
-        tasks=args.tasks,
-        device="hpu",
-        limit=10,
+        tasks=','.join(args.tasks),
+        device=device,
     )
     results = evaluate(eval_args)
     dumped = json.dumps(results, indent=2)
@@ -100,15 +93,17 @@ if args.accuracy:
         with open(args.save_accuracy_path, "w") as f:
             f.write(dumped)
 
-    if args.tasks == "wikitext":
-        print("Accuracy for %s is: %s" %
-              (args.tasks, results["results"][args.tasks]["word_perplexity,none"]))
-        eval_acc += results["results"][args.tasks]["word_perplexity,none"]
-    else:
-        print("Accuracy for %s is: %s" %
-              (args.tasks, results["results"][args.tasks]["acc,none"]))
-        eval_acc += results["results"][args.tasks]["acc,none"]
-show_msg()
+    eval_acc = 0
+    for task_name in args.tasks:
+        if task_name == "wikitext":
+            print("Accuracy for %s is: %s" %
+                  (task_name, results["results"][task_name]["word_perplexity,none"]))
+            eval_acc += results["results"][task_name]["word_perplexity,none"]
+        else:
+            print("Accuracy for %s is: %s" %
+                  (task_name, results["results"][task_name]["acc,none"]))
+            eval_acc += results["results"][task_name]["acc,none"]
+
 if args.performance:
     user_model.eval()
     from intel_extension_for_transformers.llm.evaluation.lm_eval import evaluate
@@ -120,7 +115,7 @@ if args.performance:
         tokenizer=tokenizer,
         user_model=user_model,
         batch_size=args.batch_size,
-        tasks=args.tasks,
+        tasks=','.join(args.tasks),
         limit=samples,
     )
     end = time.time()
